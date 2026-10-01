@@ -89,6 +89,27 @@ python3 verify.py --send-test-email
 
 Первая команда читает базу без изменений: проверяет целостность SQLite и связи между таблицами, показывает число объектов, пользователей и открытий карточек, последние открытия и отметку о последнем регулярном письме. Для проверки новой записи откройте объект в боте и повторите команду: число просмотров должно увеличиться на один. Вторая команда отправляет на адрес `REPORT_TO` тестовую сводку с просмотрами от последнего понедельника или четверга 10:00 МСК до текущего момента. Тестовое письмо имеет тему `[ТЕСТ]` и **не меняет** отметку плановой отправки. Сообщение «принята SMTP» означает, что почтовый сервер принял письмо; его появление во «Входящих» или «Спаме» проверьте в ящике получателя.
 
+Чтобы посмотреть сами записи, из папки `bot/` откройте SQLite в режиме только чтения:
+
+```sh
+sqlite3 -readonly data/gudd.sqlite3
+```
+
+В появившемся приглашении `sqlite>` выполните:
+
+```sql
+.headers on
+.mode column
+.tables
+SELECT id, title, price, area, is_active FROM properties;
+SELECT telegram_id, username, first_name, last_name, first_seen_at, last_seen_at FROM users;
+SELECT id, telegram_id, property_id, created_at FROM user_events WHERE event_type = 'property_opened' ORDER BY id DESC LIMIT 20;
+SELECT period_end, recipient, sent_at FROM report_deliveries ORDER BY period_end DESC;
+.quit
+```
+
+Времена в базе записаны в UTC. Файл можно также открыть в DBeaver как базу SQLite; таблицы находятся в разделе `Tables`. Не редактируйте рабочую базу вручную без резервной копии.
+
 Для размещения на Bothost загрузите в GitHub/GitLab **содержимое папки `bot/`** как отдельный репозиторий и укажите точку входа `bot.py`. **Не загружайте локальный `.env` с токеном и паролем** в репозиторий; на платформе задайте `BOT_TOKEN`, `ADMIN_IDS`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `REPORT_TO` как переменные окружения. Для сохраняемой базы задайте `DB_PATH=/app/data/gudd.sqlite3`. Если нужны уже накопленные локальные посещения, остановите локального бота и загрузите файл `bot/data/gudd.sqlite3` через файловый менеджер Bothost в `/app/data/gudd.sqlite3` до первого запуска на сервере. Если накопленные данные не нужны, база создастся при первом старте. На сервере должен работать только один экземпляр бота в режиме long polling, иначе Telegram вернёт конфликт. Проверьте доступ сервера к Telegram API и SMTP-серверу.
 
 Если бот не подключается к Telegram, проверьте доступ из терминала: `curl -I --connect-timeout 5 --max-time 8 https://api.telegram.org`. При локальном HTTP-прокси укажите `BOT_PROXY=http://127.0.0.1:порт`. MTProto-прокси Telegram в `BOT_PROXY` не подходит.
