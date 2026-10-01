@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 
 
 MOSCOW = ZoneInfo("Europe/Moscow")
-DEFAULT_RECIPIENT = "gudd22@mail.ru"
 REPORT_TIME = time(hour=10)
 
 
@@ -46,7 +45,9 @@ def load_report_settings(env_file, load_setting):
     if not 1 <= port <= 65535:
         raise ValueError("SMTP_PORT должен быть числом от 1 до 65535.")
     sender = load_setting(env_file, "SMTP_FROM") or username
-    recipient = load_setting(env_file, "REPORT_TO") or DEFAULT_RECIPIENT
+    recipient = load_setting(env_file, "REPORT_TO")
+    if not recipient:
+        raise ValueError("Для почтовой сводки укажите REPORT_TO в .env или переменных окружения.")
     if not _email_address(sender) or not _email_address(recipient):
         raise ValueError("SMTP_FROM и REPORT_TO должны быть адресами почты.")
     return ReportSettings(host, port, username, password, sender, recipient)

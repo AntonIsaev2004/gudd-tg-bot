@@ -89,6 +89,9 @@ class ReportingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SMTP_USER"):
             load_report_settings(None, read)
         values.update(SMTP_USER="sender@mail.ru", SMTP_PASSWORD="app-password")
+        with self.assertRaisesRegex(ValueError, "REPORT_TO"):
+            load_report_settings(None, read)
+        values["REPORT_TO"] = "gudd22@mail.ru"
         settings = load_report_settings(None, read)
         self.assertEqual(settings.recipient, "gudd22@mail.ru")
         self.assertEqual(settings.port, 465)
