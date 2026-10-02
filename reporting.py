@@ -102,8 +102,9 @@ def report_content(db, start_local, end_local):
     ]
     for item_id, rows in by_property.items():
         visitor_count = len({row["telegram_id"] for row in rows})
+        title = titles.get(item_id, "(объект удалён)")
         lines.append(
-            f"#{item_id} {titles.get(item_id, '(объект удалён)')}: "
+            f"{title}: "
             f"{_count(len(rows), 'просмотр', 'просмотра', 'просмотров')}, "
             f"{_count(visitor_count, 'посетитель', 'посетителя', 'посетителей')}"
         )
@@ -118,7 +119,7 @@ def report_content(db, start_local, end_local):
         ) or "Имя не указано"
         username = f"@{_one_line(row['username'])}" if row["username"] else "ник не указан"
         lines.append(
-            f"#{item_id} · {full_name} · {username} · Telegram ID {user_id} · "
+            f"{titles.get(item_id, '(объект удалён)')} · {full_name} · {username} · Telegram ID {user_id} · "
             f"просмотров {entry['count']} · первый {_local_db_time(entry['first'])} · "
             f"последний {_local_db_time(entry['last'])}"
         )
