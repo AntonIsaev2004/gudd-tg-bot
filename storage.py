@@ -77,6 +77,10 @@ class CatalogDB:
                 recipient TEXT NOT NULL,
                 sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS catalog_imports (
+                batch_id TEXT PRIMARY KEY,
+                imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if version == 0:
@@ -168,6 +172,34 @@ class CatalogDB:
                 [(item_id, media, index) for index, media in enumerate(photos)],
             )
         return item_id
+
+    def import_catalog(self, batch_id, items):
+        """Однократно загружает проверенный каталог и скрывает демонстрационные карточки."""
+        with self.conn:
+            imported = self.conn.execute(
+                "SELECT 1 FROM catalog_imports WHERE batch_id = ?", (batch_id,)
+            ).fetchone()
+            if imported:
+                return False
+            order = self.conn.execute("SELECT COALESCE(MIN(sort_order), 0) - ? FROM properties", (len(items),)).fetchone()[0]
+            for item in items:
+                cursor = self.conn.execute(
+                    """INSERT INTO properties
+                       (title, price, area, location, rooms, teaser, description,
+                        features_json, sort_order, is_active, is_demo)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)""",
+                    (item["title"], item["price"], item["area"], item["location"],
+                     item["rooms"], item["teaser"], item["description"],
+                     json.dumps(item["features"], ensure_ascii=False), order),
+                )
+                self.conn.executemany(
+                    "INSERT INTO property_photos(property_id, media, position) VALUES (?, ?, ?)",
+                    [(cursor.lastrowid, media, index) for index, media in enumerate(item["photos"])],
+                )
+                order += 1
+            self.conn.execute("UPDATE properties SET is_active = 0 WHERE is_demo = 1")
+            self.conn.execute("INSERT INTO catalog_imports(batch_id) VALUES (?)", (batch_id,))
+        return True
 
     def update_property(self, item_id, field, value):
         columns = {
@@ -284,9 +316,6 @@ class CatalogDB:
                 )
 
     def report_data(self, start_utc, end_utc):
-        properties = self.conn.execute(
-            "SELECT id, title FROM properties ORDER BY sort_order, id"
-        ).fetchall()
         visits = self.conn.execute(
             """SELECT e.telegram_id, e.property_id, e.created_at,
                       u.username, u.first_name, u.last_name
@@ -296,6 +325,13 @@ class CatalogDB:
                ORDER BY e.created_at, e.id""",
             (start_utc, end_utc),
         ).fetchall()
+        visited_ids = {row["property_id"] for row in visits}
+        properties = [
+            row for row in self.conn.execute(
+                "SELECT id, title, is_active FROM properties ORDER BY sort_order, id"
+            ).fetchall()
+            if row["is_active"] or row["id"] in visited_ids
+        ]
         return properties, visits
 
     def last_report_period_end(self):

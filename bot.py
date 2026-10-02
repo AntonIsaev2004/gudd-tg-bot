@@ -8,6 +8,7 @@ import ssl
 import smtplib
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib import error, request
@@ -59,11 +60,48 @@ class TelegramAPI:
         self.opener = request.build_opener(*handlers)
 
     def call(self, method: str, *, request_timeout: int = 15, **params):
-        body = json.dumps(params, ensure_ascii=False).encode("utf-8")
+        files = {}
+        if method == "sendMediaGroup":
+            media = [dict(entry) for entry in params["media"]]
+            for index, entry in enumerate(media):
+                path = self._local_photo(entry["media"])
+                if path:
+                    key = f"photo{index}"
+                    files[key] = path
+                    entry["media"] = f"attach://{key}"
+            params["media"] = media
+        elif method == "sendPhoto":
+            path = self._local_photo(params["photo"])
+            if path:
+                files["photo"] = path
+                params.pop("photo")
+
+        if files:
+            boundary = uuid.uuid4().hex
+            body = bytearray()
+            for name, value in params.items():
+                if isinstance(value, (dict, list)):
+                    value = json.dumps(value, ensure_ascii=False)
+                body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+                body.extend(str(value).encode("utf-8"))
+                body.extend(b"\r\n")
+            for name, path in files.items():
+                body.extend(
+                    f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{path.name}"\r\n'
+                    'Content-Type: image/jpeg\r\n\r\n'.encode()
+                )
+                body.extend(path.read_bytes())
+                body.extend(b"\r\n")
+            body.extend(f'--{boundary}--\r\n'.encode())
+            body = bytes(body)
+            content_type = f"multipart/form-data; boundary={boundary}"
+        else:
+            body = json.dumps(params, ensure_ascii=False).encode("utf-8")
+            content_type = "application/json"
         req = request.Request(
             self.base_url + method,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": content_type},
             method="POST",
         )
         try:
@@ -79,6 +117,18 @@ class TelegramAPI:
             raise BotApiError(payload.get("error_code", 0), payload.get("description", "ошибка API"))
         return payload["result"]
 
+    @staticmethod
+    def _local_photo(value):
+        if not isinstance(value, str) or not value.startswith("media/"):
+            return None
+        media_root = (Path(__file__).parent / "media").resolve()
+        path = (Path(__file__).parent / value).resolve()
+        if not path.is_relative_to(media_root) or path.suffix.lower() != ".jpg":
+            raise ValueError("Недопустимый путь к фотографии")
+        if not path.is_file() or path.stat().st_size > 10_000_000:
+            raise OSError(f"Фотография отсутствует или слишком велика: {value}")
+        return path
+
 
 def button(label: str, data: str):
     return {"text": label, "callback_data": data}
@@ -88,10 +138,6 @@ def price(value: int) -> str:
     return f"{value:,}".replace(",", " ") + " ₽"
 
 
-def short_price(value: int) -> str:
-    return f"{value / 1_000_000:g}".replace(".", ",") + " млн ₽"
-
-
 def format_area(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
@@ -99,7 +145,8 @@ def format_area(value: float) -> str:
 def catalog(db: CatalogDB):
     rows = []
     for item in db.list_properties():
-        label = f"{item.title} · {format_area(item.area)} м² · {short_price(item.price)}"
+        amount = price(item.price) if item.is_demo else f"{price(item.price)}/мес."
+        label = f"{item.title} · {format_area(item.area)} м² · {amount}"
         rows.append([button(label, f"show:{item.id}")])
     if not rows:
         return "🏠 Пока нет доступных объектов.", None
@@ -122,17 +169,19 @@ def detail_controls(db: CatalogDB, item: Property):
 
 
 def detail_caption(item: Property, photo_unavailable: bool = False):
+    amount = price(item.price) if item.is_demo else f"Аренда: {price(item.price)}/мес. с НДС"
     lines = [
         f"<b>{html.escape(item.title)}</b>",
-        f"<b>{price(item.price)}</b>",
+        f"<b>{amount}</b>",
         "",
         f"📍 {html.escape(item.location)}",
-        f"📐 {format_area(item.area)} м²  ·  🛏 {html.escape(item.rooms)}",
+        f"📐 {format_area(item.area)} м²" + (f"  ·  🏢 {html.escape(item.rooms)}" if item.rooms else ""),
         "",
         html.escape(item.description),
         "",
-        " · ".join(html.escape(feature) for feature in item.features),
     ]
+    if item.features:
+        lines.extend(("", " · ".join(html.escape(feature) for feature in item.features)))
     if item.is_demo:
         lines.extend(("", "<i>Демо-объект · фотографии иллюстративные</i>"))
     if photo_unavailable:
@@ -154,14 +203,14 @@ def send_detail(api: TelegramAPI, chat_id: int, item: Property):
         if len(item.photos) >= 2:
             media = [{"type": "photo", "media": photo_url} for photo_url in item.photos[:10]]
             media[0].update(caption=caption, parse_mode="HTML")
-            return api.call("sendMediaGroup", chat_id=chat_id, media=media)
+            return api.call("sendMediaGroup", chat_id=chat_id, media=media, request_timeout=60)
         if item.photos:
-            return [api.call("sendPhoto", chat_id=chat_id, photo=item.photos[0], caption=caption, parse_mode="HTML")]
-    except BotApiError as exc:
-        print(f"Альбом объекта {item.id} недоступен ({exc.code}); пробую обложку.", file=sys.stderr)
+            return [api.call("sendPhoto", chat_id=chat_id, photo=item.photos[0], caption=caption, parse_mode="HTML", request_timeout=30)]
+    except (BotApiError, OSError, ValueError) as exc:
+        print(f"Альбом объекта {item.id} недоступен ({type(exc).__name__}); пробую обложку.", file=sys.stderr)
         try:
-            return [api.call("sendPhoto", chat_id=chat_id, photo=item.photos[0], caption=caption, parse_mode="HTML")]
-        except BotApiError:
+            return [api.call("sendPhoto", chat_id=chat_id, photo=item.photos[0], caption=caption, parse_mode="HTML", request_timeout=30)]
+        except (BotApiError, OSError, ValueError):
             pass
     return [api.call("sendMessage", chat_id=chat_id, text=detail_caption(item, photo_unavailable=True), parse_mode="HTML")]
 

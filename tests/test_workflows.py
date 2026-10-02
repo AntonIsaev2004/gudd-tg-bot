@@ -3,6 +3,8 @@
 import tempfile
 import unittest
 import sqlite3
+import json
+from io import BytesIO
 from pathlib import Path
 
 import bot
@@ -193,6 +195,45 @@ class WorkflowTests(unittest.TestCase):
         self.db = CatalogDB(self.path)
         self.assertEqual(self.db.list_properties(active_only=False), [])
         self.assertIsNone(bot.catalog(self.db)[1])
+
+    def test_live_catalog_import_preserves_history_and_is_idempotent(self):
+        self.db.upsert_user(user(100))
+        self.db.record_event(100, "property_opened", 1)
+        manifest = json.loads((Path(__file__).parents[1] / "catalog.json").read_text(encoding="utf-8"))
+        self.assertTrue(self.db.import_catalog(manifest["batch_id"], manifest["items"]))
+        self.assertEqual(len(self.db.list_properties()), 11)
+        self.assertTrue(all(not item.is_demo for item in self.db.list_properties()))
+        self.assertIn("70 100 ₽/мес.", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
+        self.assertIn("Аренда: 70 100 ₽/мес. с НДС", bot.detail_caption(self.db.list_properties()[0]))
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 1)
+        report_properties, _ = self.db.report_data("0001-01-01 00:00:00", "9999-12-31 23:59:59")
+        self.assertEqual(len(report_properties), 12)  # 11 действующих и просмотренный демо-объект
+        self.assertFalse(self.db.import_catalog(manifest["batch_id"], manifest["items"]))
+        self.assertEqual(len(self.db.list_properties()), 11)
+
+    def test_local_photos_use_multipart_upload(self):
+        class CaptureOpener:
+            def __init__(self):
+                self.requests = []
+
+            def open(self, req, timeout):
+                self.requests.append(req)
+                return BytesIO(b'{"ok":true,"result":[{"message_id":1},{"message_id":2}]}')
+
+        manifest = json.loads((Path(__file__).parents[1] / "catalog.json").read_text(encoding="utf-8"))
+        first = manifest["items"][0]["photos"][:2]
+        api = bot.TelegramAPI("test-token")
+        api.opener = CaptureOpener()
+        result = api.call("sendMediaGroup", chat_id=100, media=[
+            {"type": "photo", "media": first[0], "caption": "Тест"},
+            {"type": "photo", "media": first[1]},
+        ])
+        self.assertEqual(len(result), 2)
+        req = api.opener.requests[0]
+        self.assertIn("multipart/form-data", req.headers["Content-type"])
+        self.assertIn(b'attach://photo0', req.data)
+        self.assertIn(b'attach://photo1', req.data)
+        self.assertIn(b'\xff\xd8\xff', req.data)
 
 
 if __name__ == "__main__":

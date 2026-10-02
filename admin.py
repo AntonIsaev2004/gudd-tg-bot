@@ -8,20 +8,20 @@ from dataclasses import dataclass, field
 
 STEPS = (
     ("title", "Название объекта (до 80 символов):"),
-    ("price", "Цена в рублях, только число (например, 25500000):"),
+    ("price", "Аренда в месяц с НДС, в рублях (например, 70100):"),
     ("area", "Площадь в м² (например, 82 или 82,5):"),
     ("location", "Локация или адрес (до 100 символов):"),
-    ("rooms", "Комнатность (например, «3 комнаты»):"),
+    ("rooms", "Тип помещения (например, «офис»):"),
     ("teaser", "Краткое описание (до 200 символов). Если не нужно — /skip:"),
-    ("description", "Полное описание для карточки (до 400 символов):"),
+    ("description", "Полное описание для карточки (до 800 символов):"),
     ("features", "Особенности через запятую (до 5 пунктов). Если не нужны — /skip:"),
 )
 FIELD_LABELS = {
-    "title": "Название", "price": "Цена", "area": "Площадь", "location": "Локация",
-    "rooms": "Комнатность", "teaser": "Краткое описание", "description": "Описание",
+    "title": "Название", "price": "Аренда в месяц", "area": "Площадь", "location": "Локация",
+    "rooms": "Тип помещения", "teaser": "Краткое описание", "description": "Описание",
     "features": "Особенности",
 }
-MAX_LENGTHS = {"title": 80, "location": 100, "rooms": 50, "teaser": 200, "description": 400}
+MAX_LENGTHS = {"title": 80, "location": 100, "rooms": 50, "teaser": 200, "description": 800}
 
 
 @dataclass
@@ -44,7 +44,7 @@ def parse_value(name, raw):
     if name == "price":
         normalized = re.sub(r"[\s\u00a0]", "", value)
         if len(normalized) > 15 or not normalized.isdecimal() or not 0 < int(normalized) < 10**15:
-            raise ValueError("Введите цену целым числом от 1 до 999 999 999 999 999.")
+            raise ValueError("Введите аренду целым числом от 1 до 999 999 999 999 999 рублей в месяц.")
         return int(normalized)
     if name == "area":
         normalized = re.sub(r"[\s\u00a0]", "", value).replace(",", ".")
@@ -104,9 +104,9 @@ class AdminPanel:
             self.list_menu(chat_id)
             return
         rows = [
-            [button("Название", f"adm:field:{item_id}:title"), button("Цена", f"adm:field:{item_id}:price")],
+            [button("Название", f"adm:field:{item_id}:title"), button("Аренда в месяц", f"adm:field:{item_id}:price")],
             [button("Площадь", f"adm:field:{item_id}:area"), button("Локация", f"adm:field:{item_id}:location")],
-            [button("Комнатность", f"adm:field:{item_id}:rooms"), button("Краткое описание", f"adm:field:{item_id}:teaser")],
+            [button("Тип помещения", f"adm:field:{item_id}:rooms"), button("Краткое описание", f"adm:field:{item_id}:teaser")],
             [button("Описание", f"adm:field:{item_id}:description"), button("Особенности", f"adm:field:{item_id}:features")],
             [button(f"🖼 Фото ({len(item.photos)})", f"adm:photos:{item_id}")],
             [button("Показать" if not self.db.is_active(item_id) else "Скрыть", f"adm:toggle:{item_id}")],
@@ -116,10 +116,12 @@ class AdminPanel:
             [button("← Список", "adm:list")],
         ]
         description = html.escape(item.description)
+        amount = (f"Цена: {item.price:,} ₽" if item.is_demo else
+                  f"Аренда: {item.price:,} ₽/мес. с НДС")
         self._send(
             chat_id,
             f"<b>#{item.id} {html.escape(item.title)}</b>\n"
-            f"{item.price:,} ₽ · {format(item.area, 'g').replace('.', ',')} м²\n"
+            f"{amount} · {format(item.area, 'g').replace('.', ',')} м²\n"
             f"{html.escape(item.location)} · {html.escape(item.rooms)}\n"
             f"Статус: {'показывается' if self.db.is_active(item_id) else 'скрыт'}"
             f"{' · демо' if item.is_demo else ''}\n\n"
