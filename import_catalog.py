@@ -69,10 +69,12 @@ def main():
         raise SystemExit("База не найдена. Сначала запустите бота и проверьте DB_PATH.")
     db = CatalogDB(db_path)
     try:
-        if db.import_catalog(batch_id, items):
-            print(f"Загружено {len(items)} объектов. Демонстрационные карточки скрыты.")
+        imported, removed = db.import_catalog(batch_id, items)
+        if imported:
+            print(f"Загружено {len(items)} объектов.")
         else:
             print("Эта партия уже загружена. Повторных карточек нет.")
+        print(f"Удалено демонстрационных карточек: {removed} (включая связанные с ними просмотры).")
     finally:
         db.close()
 

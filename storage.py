@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from mock_data import PROPERTIES, Property
+from models import Property
 
 
 class CatalogDB:
@@ -85,9 +85,6 @@ class CatalogDB:
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if version == 0:
             with self.conn:
-                if self.conn.execute("SELECT COUNT(*) FROM properties").fetchone()[0] == 0:
-                    for position, item in enumerate(PROPERTIES):
-                        self._insert_property(item, position)
                 self.conn.execute("PRAGMA user_version = 1")
         if version < 2:
             with self.conn:
@@ -113,19 +110,6 @@ class CatalogDB:
             with self.conn:
                 self.conn.execute("PRAGMA user_version = 4")
 
-    def _insert_property(self, item, sort_order):
-        self.conn.execute(
-            """INSERT INTO properties
-               (id, title, price, area, location, rooms, teaser, description, features_json, sort_order, is_demo)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
-            (item.id, item.title, item.price, item.area, item.location, item.rooms,
-             item.teaser, item.description, json.dumps(item.features, ensure_ascii=False), sort_order),
-        )
-        self.conn.executemany(
-            "INSERT INTO property_photos(property_id, media, position) VALUES (?, ?, ?)",
-            [(item.id, media, index) for index, media in enumerate(item.photos)],
-        )
-
     def _property_from_row(self, row):
         photos = self.conn.execute(
             "SELECT media FROM property_photos WHERE property_id = ? ORDER BY position, id", (row["id"],)
@@ -134,7 +118,6 @@ class CatalogDB:
             row["id"], row["title"], row["price"], row["area"], row["location"],
             row["rooms"], row["teaser"], row["description"],
             tuple(json.loads(row["features_json"])), tuple(photo["media"] for photo in photos),
-            bool(row["is_demo"]),
         )
 
     def list_properties(self, active_only=True):
@@ -174,32 +157,40 @@ class CatalogDB:
         return item_id
 
     def import_catalog(self, batch_id, items):
-        """Однократно загружает проверенный каталог и скрывает демонстрационные карточки."""
+        """Загружает каталог один раз и удаляет старые демо-карточки с их просмотрами."""
         with self.conn:
             imported = self.conn.execute(
                 "SELECT 1 FROM catalog_imports WHERE batch_id = ?", (batch_id,)
             ).fetchone()
-            if imported:
-                return False
-            order = self.conn.execute("SELECT COALESCE(MIN(sort_order), 0) - ? FROM properties", (len(items),)).fetchone()[0]
-            for item in items:
-                cursor = self.conn.execute(
-                    """INSERT INTO properties
-                       (title, price, area, location, rooms, teaser, description,
-                        features_json, sort_order, is_active, is_demo)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)""",
-                    (item["title"], item["price"], item["area"], item["location"],
-                     item["rooms"], item["teaser"], item["description"],
-                     json.dumps(item["features"], ensure_ascii=False), order),
+            if not imported:
+                order = self.conn.execute("SELECT COALESCE(MIN(sort_order), 0) - ? FROM properties", (len(items),)).fetchone()[0]
+                for item in items:
+                    cursor = self.conn.execute(
+                        """INSERT INTO properties
+                           (title, price, area, location, rooms, teaser, description,
+                            features_json, sort_order, is_active, is_demo)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)""",
+                        (item["title"], item["price"], item["area"], item["location"],
+                         item["rooms"], item["teaser"], item["description"],
+                         json.dumps(item["features"], ensure_ascii=False), order),
+                    )
+                    self.conn.executemany(
+                        "INSERT INTO property_photos(property_id, media, position) VALUES (?, ?, ?)",
+                        [(cursor.lastrowid, media, index) for index, media in enumerate(item["photos"])],
+                    )
+                    order += 1
+                self.conn.execute("INSERT INTO catalog_imports(batch_id) VALUES (?)", (batch_id,))
+            demo_count = self.conn.execute("SELECT COUNT(*) FROM properties WHERE is_demo = 1").fetchone()[0]
+            if demo_count:
+                self.conn.execute(
+                    "DELETE FROM user_events WHERE property_id IN (SELECT id FROM properties WHERE is_demo = 1)"
                 )
-                self.conn.executemany(
-                    "INSERT INTO property_photos(property_id, media, position) VALUES (?, ?, ?)",
-                    [(cursor.lastrowid, media, index) for index, media in enumerate(item["photos"])],
+                self.conn.execute(
+                    """UPDATE users SET last_property_id = NULL
+                       WHERE last_property_id IN (SELECT id FROM properties WHERE is_demo = 1)"""
                 )
-                order += 1
-            self.conn.execute("UPDATE properties SET is_active = 0 WHERE is_demo = 1")
-            self.conn.execute("INSERT INTO catalog_imports(batch_id) VALUES (?)", (batch_id,))
-        return True
+                self.conn.execute("DELETE FROM properties WHERE is_demo = 1")
+        return not bool(imported), demo_count
 
     def update_property(self, item_id, field, value):
         columns = {
@@ -223,13 +214,6 @@ class CatalogDB:
             self.conn.execute(
                 "UPDATE properties SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (int(active), item_id),
-            )
-
-    def set_demo(self, item_id, is_demo):
-        with self.conn:
-            self.conn.execute(
-                "UPDATE properties SET is_demo = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (int(is_demo), item_id),
             )
 
     def delete_property(self, item_id):

@@ -110,21 +110,18 @@ class AdminPanel:
             [button("Описание", f"adm:field:{item_id}:description"), button("Особенности", f"adm:field:{item_id}:features")],
             [button(f"🖼 Фото ({len(item.photos)})", f"adm:photos:{item_id}")],
             [button("Показать" if not self.db.is_active(item_id) else "Скрыть", f"adm:toggle:{item_id}")],
-            [button("Убрать пометку «демо»" if item.is_demo else "Пометить как демо", f"adm:demo:{item_id}")],
             [button("↑ Выше", f"adm:up:{item_id}"), button("↓ Ниже", f"adm:down:{item_id}")],
             [button("🗑 Удалить объект", f"adm:delete:{item_id}")],
             [button("← Список", "adm:list")],
         ]
         description = html.escape(item.description)
-        amount = (f"Цена: {item.price:,} ₽" if item.is_demo else
-                  f"Аренда: {item.price:,} ₽/мес. с НДС")
+        amount = f"Аренда: {item.price:,} ₽/мес. с НДС"
         self._send(
             chat_id,
             f"<b>#{item.id} {html.escape(item.title)}</b>\n"
             f"{amount} · {format(item.area, 'g').replace('.', ',')} м²\n"
             f"{html.escape(item.location)} · {html.escape(item.rooms)}\n"
-            f"Статус: {'показывается' if self.db.is_active(item_id) else 'скрыт'}"
-            f"{' · демо' if item.is_demo else ''}\n\n"
+            f"Статус: {'показывается' if self.db.is_active(item_id) else 'скрыт'}\n\n"
             f"Кратко: {html.escape(item.teaser or '—')}\n"
             f"Описание: {description}\n"
             f"Особенности: {html.escape(', '.join(item.features) or '—')}",
@@ -296,11 +293,6 @@ class AdminPanel:
             self.photo_menu(chat_id, item_id)
         elif action == "toggle":
             self.db.set_active(item_id, not self.db.is_active(item_id))
-            self.edit_menu(chat_id, item_id)
-        elif action == "demo":
-            item = self.db.get_property(item_id, active_only=False)
-            if item:
-                self.db.set_demo(item_id, not item.is_demo)
             self.edit_menu(chat_id, item_id)
         elif action in ("up", "down"):
             self.db.move_property(item_id, -1 if action == "up" else 1)

@@ -60,6 +60,16 @@ class WorkflowTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / "gudd.sqlite3"
         self.db = CatalogDB(self.path)
+        self.db.create_property({
+            "title": "Офис первый", "price": 70_100, "area": 36.3,
+            "location": "Москва", "rooms": "Офис", "teaser": "",
+            "description": "Помещение в аренду", "features": [],
+        }, ["photo_1", "photo_2"])
+        self.db.create_property({
+            "title": "Офис второй", "price": 90_000, "area": 50,
+            "location": "Москва", "rooms": "Офис", "teaser": "",
+            "description": "Помещение в аренду", "features": [],
+        }, ["photo_3"])
         self.api = FakeAPI()
         self.admin = AdminPanel(self.api, self.db, {42})
         bot.ACTIVE_DETAILS.clear()
@@ -70,7 +80,7 @@ class WorkflowTests(unittest.TestCase):
         bot.ACTIVE_DETAILS.clear()
 
     def test_catalog_user_tracking_and_persistence(self):
-        self.assertEqual(len(self.db.list_properties()), 8)
+        self.assertEqual(len(self.db.list_properties()), 2)
         bot.handle_message(self.api, self.db, self.admin, message(100, "/start"))
         bot.handle_callback(self.api, self.db, self.admin, callback(100, "show:1"))
         row = self.db.conn.execute("SELECT * FROM users WHERE telegram_id = 100").fetchone()
@@ -86,7 +96,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("caption", album["media"][1])
         self.db.close()
         self.db = CatalogDB(self.path)
-        self.assertEqual(len(self.db.list_properties()), 8)
+        self.assertEqual(len(self.db.list_properties()), 2)
         self.assertEqual(self.db.conn.execute("SELECT last_property_id FROM users WHERE telegram_id = 100").fetchone()[0], 1)
 
     def test_manager_link_and_no_contact_collection(self):
@@ -135,17 +145,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNotNone(self.db.get_property(1))
         bot.handle_message(self.api, self.db, self.admin, message(42, "/admin"))
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:title"))
-        bot.handle_message(self.api, self.db, self.admin, message(42, "Новая квартира"))
-        self.assertEqual(self.db.get_property(1).title, "Новая квартира")
+        bot.handle_message(self.api, self.db, self.admin, message(42, "Новый офис"))
+        self.assertEqual(self.db.get_property(1).title, "Новый офис")
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:area"))
         bot.handle_message(self.api, self.db, self.admin, message(42, "82,5"))
         self.assertEqual(self.db.get_property(1).area, 82.5)
         self.assertIn("82,5 м²", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
-        bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:demo:1"))
-        self.assertFalse(self.db.get_property(1).is_demo)
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:toggle:1"))
         self.assertIsNone(self.db.get_property(1))
-        self.assertEqual(len(bot.catalog(self.db)[1]["inline_keyboard"]), 7)
+        self.assertEqual(len(bot.catalog(self.db)[1]["inline_keyboard"]), 1)
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:toggle:1"))
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:down:1"))
         self.assertEqual([item.id for item in self.db.list_properties()][:2], [2, 1])
@@ -153,7 +161,7 @@ class WorkflowTests(unittest.TestCase):
     def test_admin_creates_and_deletes_card_with_photos(self):
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:add"))
         answers = (
-            "Тестовый дом", "9500000", "75", "Казань", "2 комнаты",
+            "Тестовый офис", "95000", "75", "Казань", "Офис",
             "Короткий текст", "Подробное описание", "Парковка, Балкон",
         )
         self.assertEqual(len(answers), len(STEPS))
@@ -166,11 +174,10 @@ class WorkflowTests(unittest.TestCase):
         bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:save:{save_token}"))
         item_id = max(item.id for item in self.db.list_properties(active_only=False))
         bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:save:{save_token}"))
-        self.assertEqual(len(self.db.list_properties(active_only=False)), 9)
+        self.assertEqual(len(self.db.list_properties(active_only=False)), 3)
         created = self.db.get_property(item_id)
-        self.assertEqual(created.title, "Тестовый дом")
+        self.assertEqual(created.title, "Тестовый офис")
         self.assertEqual(created.photos, ("file_1", "file_2"))
-        self.assertFalse(created.is_demo)
         bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:addphoto:{item_id}"))
         bot.handle_message(self.api, self.db, self.admin, message(42, photo="file_3"))
         bot.handle_message(self.api, self.db, self.admin, message(42, "/done"))
@@ -186,9 +193,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(self.db.get_property(item_id, active_only=False))
         self.db.close()
         self.db = CatalogDB(self.path)
-        self.assertEqual(len(self.db.list_properties(active_only=False)), 8)
+        self.assertEqual(len(self.db.list_properties(active_only=False)), 2)
 
-    def test_deleting_all_cards_does_not_reseed_demo(self):
+    def test_deleting_all_cards_does_not_reseed(self):
         for item in self.db.list_properties(active_only=False):
             self.db.delete_property(item.id)
         self.db.close()
@@ -197,19 +204,57 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(bot.catalog(self.db)[1])
 
     def test_live_catalog_import_preserves_history_and_is_idempotent(self):
+        with self.db.conn:
+            self.db.conn.execute("UPDATE properties SET is_demo = 1 WHERE id = 1")
         self.db.upsert_user(user(100))
         self.db.record_event(100, "property_opened", 1)
+        self.db.upsert_user(user(101))
+        self.db.record_event(101, "property_opened", 2)
         manifest = json.loads((Path(__file__).parents[1] / "catalog.json").read_text(encoding="utf-8"))
-        self.assertTrue(self.db.import_catalog(manifest["batch_id"], manifest["items"]))
-        self.assertEqual(len(self.db.list_properties()), 11)
-        self.assertTrue(all(not item.is_demo for item in self.db.list_properties()))
+        self.assertEqual(self.db.import_catalog(manifest["batch_id"], manifest["items"]), (True, 1))
+        self.assertEqual(len(self.db.list_properties()), 12)
+        self.assertIsNone(self.db.get_property(1, active_only=False))
+        self.assertEqual(self.db.conn.execute(
+            "SELECT COUNT(*) FROM property_photos WHERE property_id = 1").fetchone()[0], 0)
+        self.assertIsNone(self.db.conn.execute(
+            "SELECT last_property_id FROM users WHERE telegram_id = 100").fetchone()[0])
+        self.assertEqual(self.db.conn.execute(
+            "SELECT last_property_id FROM users WHERE telegram_id = 101").fetchone()[0], 2)
         self.assertIn("70 100 ₽/мес.", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
         self.assertIn("Аренда: 70 100 ₽/мес. с НДС", bot.detail_caption(self.db.list_properties()[0]))
         self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 1)
         report_properties, _ = self.db.report_data("0001-01-01 00:00:00", "9999-12-31 23:59:59")
-        self.assertEqual(len(report_properties), 12)  # 11 действующих и просмотренный демо-объект
-        self.assertFalse(self.db.import_catalog(manifest["batch_id"], manifest["items"]))
-        self.assertEqual(len(self.db.list_properties()), 11)
+        self.assertEqual(len(report_properties), 12)
+        self.assertEqual(self.db.import_catalog(manifest["batch_id"], manifest["items"]), (False, 0))
+        self.assertEqual(len(self.db.list_properties()), 12)
+
+    def test_import_cleans_legacy_cards_after_batch_was_loaded(self):
+        manifest = json.loads((Path(__file__).parents[1] / "catalog.json").read_text(encoding="utf-8"))
+        self.assertEqual(self.db.import_catalog(manifest["batch_id"], manifest["items"]), (True, 0))
+        with self.db.conn:
+            self.db.conn.execute("UPDATE properties SET is_demo = 1 WHERE id = 1")
+        self.assertEqual(self.db.import_catalog(manifest["batch_id"], manifest["items"]), (False, 1))
+        self.assertEqual(len(self.db.list_properties()), 12)
+
+    def test_failed_import_keeps_old_cards_and_events(self):
+        with self.db.conn:
+            self.db.conn.execute("UPDATE properties SET is_demo = 1 WHERE id = 1")
+        self.db.upsert_user(user(100))
+        self.db.record_event(100, "property_opened", 1)
+        manifest = json.loads((Path(__file__).parents[1] / "catalog.json").read_text(encoding="utf-8"))
+        invalid = [dict(manifest["items"][0], price=-1)]
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.import_catalog("invalid", invalid)
+        self.assertIsNotNone(self.db.get_property(1, active_only=False))
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 1)
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM catalog_imports").fetchone()[0], 0)
+
+    def test_new_database_starts_without_fake_cards(self):
+        empty = CatalogDB(Path(self.temp.name) / "empty.sqlite3")
+        try:
+            self.assertEqual(empty.list_properties(), [])
+        finally:
+            empty.close()
 
     def test_local_photos_use_multipart_upload(self):
         class CaptureOpener:

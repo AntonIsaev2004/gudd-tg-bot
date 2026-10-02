@@ -20,6 +20,12 @@ class ReportingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / "gudd.sqlite3"
         self.db = CatalogDB(self.path)
+        for title, price in (("Офис первый", 70_100), ("Офис второй", 90_000)):
+            self.db.create_property({
+                "title": title, "price": price, "area": 50,
+                "location": "Москва", "rooms": "Офис", "teaser": "",
+                "description": "Помещение в аренду", "features": [],
+            }, ["photo"])
         self.db.upsert_user({"id": 100, "username": "buyer", "first_name": "Иван", "last_name": "Иванов"})
         self.db.upsert_user({"id": 101, "username": "guest", "first_name": "Анна"})
         with self.db.conn:
@@ -49,8 +55,8 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("01.10 10:00–05.10.2026 10:00", subject)
         self.assertIn("Просмотров объектов: 3", body)
         self.assertIn("Уникальных посетителей: 1", body)
-        self.assertIn("Квартира у набережной: 2 просмотра, 1 посетитель", body)
-        self.assertIn("Квартира у набережной · Иван Иванов · @buyer", body)
+        self.assertIn("Офис первый: 2 просмотра, 1 посетитель", body)
+        self.assertIn("Офис первый · Иван Иванов · @buyer", body)
         self.assertNotRegex(body, r"(?m)^#\d+\b")
         self.assertNotIn("телефон", body)
         self.assertNotIn("Telegram ID", body)
@@ -58,7 +64,7 @@ class ReportingTests(unittest.TestCase):
         self.assertIn('href="https://t.me/buyer"', html_body)
         self.assertNotIn("Telegram ID", html_body)
         self.assertNotIn("телефон", html_body)
-        self.assertEqual(sum("Квартира у набережной · Иван Иванов" in line for line in body.splitlines()), 1)
+        self.assertEqual(sum("Офис первый · Иван Иванов" in line for line in body.splitlines()), 1)
         _, next_body, _ = report_content(self.db, monday, thursday)
         self.assertIn("Просмотров объектов: 2", next_body)
         self.assertIn("Уникальных посетителей: 1", next_body)

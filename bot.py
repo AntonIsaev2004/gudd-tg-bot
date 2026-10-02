@@ -15,7 +15,7 @@ from urllib import error, request
 from urllib.parse import urlsplit
 
 from admin import AdminPanel
-from mock_data import Property
+from models import Property
 from reporting import load_report_settings, send_due_report
 from storage import CatalogDB
 
@@ -145,7 +145,7 @@ def format_area(value: float) -> str:
 def catalog(db: CatalogDB):
     rows = []
     for item in db.list_properties():
-        amount = price(item.price) if item.is_demo else f"{price(item.price)}/мес."
+        amount = f"{price(item.price)}/мес."
         label = f"{item.title} · {format_area(item.area)} м² · {amount}"
         rows.append([button(label, f"show:{item.id}")])
     if not rows:
@@ -169,7 +169,7 @@ def detail_controls(db: CatalogDB, item: Property):
 
 
 def detail_caption(item: Property, photo_unavailable: bool = False):
-    amount = price(item.price) if item.is_demo else f"Аренда: {price(item.price)}/мес. с НДС"
+    amount = f"Аренда: {price(item.price)}/мес. с НДС"
     lines = [
         f"<b>{html.escape(item.title)}</b>",
         f"<b>{amount}</b>",
@@ -182,8 +182,6 @@ def detail_caption(item: Property, photo_unavailable: bool = False):
     ]
     if item.features:
         lines.extend(("", " · ".join(html.escape(feature) for feature in item.features)))
-    if item.is_demo:
-        lines.extend(("", "<i>Демо-объект · фотографии иллюстративные</i>"))
     if photo_unavailable:
         lines.append("<i>Фото временно недоступны.</i>")
     return "\n".join(lines)
