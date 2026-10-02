@@ -1,15 +1,18 @@
 """Проверки периодов отчёта и SMTP без сетевых запросов."""
 
+import io
 import sqlite3
 import ssl
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from reporting import MOSCOW, ReportSettings, load_report_settings, report_content, send_due_report, send_report_email
 from storage import CatalogDB
+from verify import send_test_email
 
 
 class ReportingTests(unittest.TestCase):
@@ -42,7 +45,7 @@ class ReportingTests(unittest.TestCase):
         start = datetime(2026, 10, 1, 10, tzinfo=MOSCOW)
         monday = datetime(2026, 10, 5, 10, tzinfo=MOSCOW)
         thursday = datetime(2026, 10, 8, 10, tzinfo=MOSCOW)
-        subject, body = report_content(self.db, start, monday)
+        subject, body, html_body = report_content(self.db, start, monday)
         self.assertIn("01.10 10:00–05.10.2026 10:00", subject)
         self.assertIn("Просмотров объектов: 3", body)
         self.assertIn("Уникальных посетителей: 1", body)
@@ -50,22 +53,58 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("Квартира у набережной · Иван Иванов · @buyer", body)
         self.assertNotRegex(body, r"(?m)^#\d+\b")
         self.assertNotIn("телефон", body)
-        self.assertEqual(sum("Telegram ID 100" in line for line in body.splitlines()), 2)
-        _, next_body = report_content(self.db, monday, thursday)
+        self.assertNotIn("Telegram ID", body)
+        self.assertIn("<table", html_body)
+        self.assertIn('href="https://t.me/buyer"', html_body)
+        self.assertNotIn("Telegram ID", html_body)
+        self.assertNotIn("телефон", html_body)
+        self.assertEqual(sum("Квартира у набережной · Иван Иванов" in line for line in body.splitlines()), 1)
+        _, next_body, _ = report_content(self.db, monday, thursday)
         self.assertIn("Просмотров объектов: 2", next_body)
         self.assertIn("Уникальных посетителей: 1", next_body)
-        self.assertNotIn("Telegram ID 100", next_body)
+        self.assertNotIn("Иван Иванов", next_body)
+
+    def test_html_escapes_card_and_profile_text_and_handles_missing_nick(self):
+        self.db.update_property(1, "title", "Дом <у реки>")
+        self.db.upsert_user({
+            "id": 100, "username": 'buyer"><img src=x>',
+            "first_name": "<Иван>", "last_name": "Иванов",
+        })
+        start = datetime(2026, 10, 1, 10, tzinfo=MOSCOW)
+        monday = datetime(2026, 10, 5, 10, tzinfo=MOSCOW)
+        _, _, html_body = report_content(self.db, start, monday)
+        self.assertIn("Дом &lt;у реки&gt;", html_body)
+        self.assertIn("&lt;Иван&gt;", html_body)
+        self.assertNotIn("<img", html_body)
+        self.assertNotIn("https://t.me/buyer", html_body)
+
+        self.db.upsert_user({"id": 101, "first_name": "Анна"})
+        _, _, next_html = report_content(self.db, monday, datetime(2026, 10, 8, 10, tzinfo=MOSCOW))
+        self.assertIn("не указан", next_html)
+        self.assertNotIn("https://t.me/guest", next_html)
+
+    def test_deleted_card_keeps_its_views_without_exposing_internal_id(self):
+        self.db.delete_property(1)
+        _, body, html_body = report_content(
+            self.db, datetime(2026, 10, 1, 10, tzinfo=MOSCOW),
+            datetime(2026, 10, 5, 10, tzinfo=MOSCOW),
+        )
+        self.assertIn("(объект удалён): 2 просмотра, 1 посетитель", body)
+        self.assertIn("(объект удалён)", html_body)
+        self.assertNotIn("Telegram ID", body + html_body)
+        self.assertNotIn("#1", body)
+        self.assertNotRegex(html_body, r">\s*#1(?:\s|<)")
 
     def test_monday_thursday_due_time_retry_and_catchup(self):
         settings = ReportSettings("smtp.mail.ru", 465, "sender@mail.ru", "unused", "sender@mail.ru", "gudd22@mail.ru")
         sent = []
-        sender = lambda config, subject, body: sent.append((subject, body))
+        sender = lambda config, subject, body, html_body: sent.append((subject, body, html_body))
         self.db.mark_report_sent("2026-10-01", settings.recipient)
         before = datetime(2026, 10, 5, 9, 59, tzinfo=MOSCOW)
         monday = datetime(2026, 10, 5, 10, tzinfo=MOSCOW)
         self.assertIsNone(send_due_report(self.db, settings, before, sender))
 
-        def fail_once(config, subject, body):
+        def fail_once(config, subject, body, html_body):
             raise OSError("SMTP недоступен")
 
         with self.assertRaises(OSError):
@@ -116,8 +155,12 @@ class ReportingTests(unittest.TestCase):
 
     def test_smtp_delivery_uses_tls_and_requested_recipient(self):
         settings = ReportSettings("smtp.mail.ru", 465, "sender@mail.ru", "secret", "sender@mail.ru", "gudd22@mail.ru")
+        subject, body, html_body = report_content(
+            self.db, datetime(2026, 10, 1, 10, tzinfo=MOSCOW),
+            datetime(2026, 10, 5, 10, tzinfo=MOSCOW),
+        )
         with patch("reporting.smtplib.SMTP_SSL") as smtp_class:
-            send_report_email(settings, "Сводка", "Посетителей: 2")
+            send_report_email(settings, subject, body, html_body)
         args, kwargs = smtp_class.call_args
         self.assertEqual(args, ("smtp.mail.ru", 465))
         self.assertEqual(kwargs["context"].verify_mode, ssl.CERT_REQUIRED)
@@ -125,7 +168,19 @@ class ReportingTests(unittest.TestCase):
         smtp.login.assert_called_once_with("sender@mail.ru", "secret")
         message = smtp.send_message.call_args.args[0]
         self.assertEqual(message["To"], "gudd22@mail.ru")
-        self.assertIn("Посетителей: 2", message.get_content())
+        self.assertEqual(message.get_content_type(), "multipart/alternative")
+        self.assertIn("Просмотров объектов: 3", message.get_body(preferencelist=("plain",)).get_content())
+        self.assertIn('href="https://t.me/buyer"', message.get_body(preferencelist=("html",)).get_content())
+
+    def test_test_email_uses_html_without_marking_a_regular_delivery(self):
+        settings = ReportSettings("smtp.mail.ru", 465, "sender@mail.ru", "secret", "sender@mail.ru", "gudd22@mail.ru")
+        with patch("verify.load_report_settings", return_value=settings), patch("verify.send_report_email") as deliver:
+            with redirect_stdout(io.StringIO()):
+                send_test_email(self.path, Path(self.temp.name) / ".env")
+        args = deliver.call_args.args
+        self.assertTrue(args[1].startswith("[ТЕСТ]"))
+        self.assertIn("<table", args[3])
+        self.assertIsNone(self.db.last_report_period_end())
 
 
 if __name__ == "__main__":

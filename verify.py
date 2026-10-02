@@ -62,10 +62,14 @@ def send_test_email(path, env_file):
     end = now + timedelta(seconds=1)
     db = CatalogDB(path)
     try:
-        subject, body = report_content(db, start, end)
+        subject, body, html_body = report_content(db, start, end)
     finally:
         db.close()
-    send_report_email(settings, f"[ТЕСТ] {subject}", "Проверочное письмо; расписание не менялось.\n\n" + body)
+    send_report_email(
+        settings, f"[ТЕСТ] {subject}",
+        "Проверочное письмо; расписание не менялось.\n\n" + body,
+        html_body,
+    )
     print(f"Тестовая сводка за {start:%d.%m.%Y %H:%M}–{now:%d.%m.%Y %H:%M} МСК принята SMTP для {settings.recipient}.")
     print("Проверьте папки «Входящие» и «Спам» у адресата.")
 
