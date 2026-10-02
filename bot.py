@@ -15,6 +15,7 @@ from urllib import error, request
 from urllib.parse import urlsplit
 
 from admin import AdminPanel
+from labels import compact_title
 from models import Property
 from reporting import load_report_settings, send_due_report
 from storage import CatalogDB
@@ -145,12 +146,12 @@ def format_area(value: float) -> str:
 def catalog(db: CatalogDB):
     rows = []
     for item in db.list_properties():
-        amount = f"{price(item.price)}/мес."
-        label = f"{item.title} · {format_area(item.area)} м² · {amount}"
-        rows.append([button(label, f"show:{item.id}")])
+        action = f"show:{item.id}"
+        rows.append([button(compact_title(item.title), action)])
+        rows.append([button(f"↳ {format_area(item.area)} м² · {price(item.price)}", action)])
     if not rows:
         return "🏠 Пока нет доступных объектов.", None
-    return "🏠 Объекты", {"inline_keyboard": rows}
+    return "🏠 Объекты · аренда в месяц", {"inline_keyboard": rows}
 
 
 def detail_controls(db: CatalogDB, item: Property):
@@ -160,9 +161,9 @@ def detail_controls(db: CatalogDB, item: Property):
     if len(items) > 1:
         previous_item = items[(index - 1) % len(items)]
         next_item = items[(index + 1) % len(items)]
-        rows.append([button("← Предыдущий", f"view:{previous_item.id}"), button("Следующий →", f"view:{next_item.id}")])
+        rows.append([button("← Пред.", f"view:{previous_item.id}"), button("След. →", f"view:{next_item.id}")])
     rows.extend([
-        [button("← К списку объектов", f"back:{item.id}")],
+        [button("← К списку", f"back:{item.id}")],
         [{"text": "💬 Связаться с менеджером", "url": "https://t.me/gudd_manager"}],
     ])
     return f"Объект {index + 1} из {len(items)}", {"inline_keyboard": rows}
