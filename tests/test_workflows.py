@@ -145,21 +145,23 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNotNone(self.db.get_property(1))
         bot.handle_message(self.api, self.db, self.admin, message(42, "/admin"))
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:title"))
+        self.assertIn("до 20 символов", self.api.calls[-1][1]["text"])
         bot.handle_message(self.api, self.db, self.admin, message(42, "Новый офис"))
         self.assertEqual(self.db.get_property(1).title, "Новый офис")
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:area"))
         bot.handle_message(self.api, self.db, self.admin, message(42, "82,5"))
         self.assertEqual(self.db.get_property(1).area, 82.5)
-        self.assertIn("82,5 м²", bot.catalog(self.db)[1]["inline_keyboard"][1][0]["text"])
+        self.assertIn("82,5 м²", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:toggle:1"))
         self.assertIsNone(self.db.get_property(1))
-        self.assertEqual(len(bot.catalog(self.db)[1]["inline_keyboard"]), 2)
+        self.assertEqual(len(bot.catalog(self.db)[1]["inline_keyboard"]), 1)
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:toggle:1"))
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:down:1"))
         self.assertEqual([item.id for item in self.db.list_properties()][:2], [2, 1])
 
     def test_admin_creates_and_deletes_card_with_photos(self):
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:add"))
+        self.assertIn("до 20 символов", self.api.calls[-1][1]["text"])
         answers = (
             "Тестовый офис", "95000", "75", "Казань", "Офис",
             "Короткий текст", "Подробное описание", "Парковка, Балкон",
@@ -220,10 +222,7 @@ class WorkflowTests(unittest.TestCase):
             "SELECT last_property_id FROM users WHERE telegram_id = 100").fetchone()[0])
         self.assertEqual(self.db.conn.execute(
             "SELECT last_property_id FROM users WHERE telegram_id = 101").fetchone()[0], 2)
-        rows = bot.catalog(self.db)[1]["inline_keyboard"]
-        self.assertIn("70 100 ₽", rows[1][0]["text"])
-        self.assertEqual(rows[0][0]["callback_data"], rows[1][0]["callback_data"])
-        self.assertTrue(all(len(row[0]["text"]) <= 24 for row in rows))
+        self.assertIn("70 100 ₽/мес.", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
         self.assertIn("Аренда: 70 100 ₽/мес. с НДС", bot.detail_caption(self.db.list_properties()[0]))
         self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 1)
         report_properties, _ = self.db.report_data("0001-01-01 00:00:00", "9999-12-31 23:59:59")

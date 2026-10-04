@@ -5,11 +5,14 @@ import re
 import secrets
 from dataclasses import dataclass, field
 
-from labels import compact_title
 
+TITLE_BUTTON_HINT = (
+    "Ориентир для кнопки — до 20 символов в названии: рядом будут площадь и аренда. "
+    "Длинное название может обрезаться на телефоне."
+)
 
 STEPS = (
-    ("title", "Название объекта (до 80 символов):"),
+    ("title", f"Название объекта (до 80 символов):\n{TITLE_BUTTON_HINT}"),
     ("price", "Аренда в месяц с НДС, в рублях (например, 70100):"),
     ("area", "Площадь в м² (например, 82 или 82,5):"),
     ("location", "Локация или адрес (до 100 символов):"),
@@ -95,7 +98,7 @@ class AdminPanel:
         rows = []
         for item in self.db.list_properties(active_only=False):
             icon = "✅" if self.db.is_active(item.id) else "🙈"
-            rows.append([button(f"{icon} {compact_title(item.title)}", f"adm:edit:{item.id}")])
+            rows.append([button(f"{icon} #{item.id} {item.title}", f"adm:edit:{item.id}")])
         rows.append([button("➕ Добавить", "adm:add"), button("← Меню", "adm:menu")])
         self._send(chat_id, "Объекты (🙈 — скрыт):", rows)
 
@@ -106,9 +109,9 @@ class AdminPanel:
             self.list_menu(chat_id)
             return
         rows = [
-            [button("Название", f"adm:field:{item_id}:title"), button("Аренда", f"adm:field:{item_id}:price")],
-            [button("Площадь", f"adm:field:{item_id}:area"), button("Адрес", f"adm:field:{item_id}:location")],
-            [button("Тип", f"adm:field:{item_id}:rooms"), button("Кратко", f"adm:field:{item_id}:teaser")],
+            [button("Название", f"adm:field:{item_id}:title"), button("Аренда в месяц", f"adm:field:{item_id}:price")],
+            [button("Площадь", f"adm:field:{item_id}:area"), button("Локация", f"adm:field:{item_id}:location")],
+            [button("Тип помещения", f"adm:field:{item_id}:rooms"), button("Краткое описание", f"adm:field:{item_id}:teaser")],
             [button("Описание", f"adm:field:{item_id}:description"), button("Особенности", f"adm:field:{item_id}:features")],
             [button(f"🖼 Фото ({len(item.photos)})", f"adm:photos:{item_id}")],
             [button("Показать" if not self.db.is_active(item_id) else "Скрыть", f"adm:toggle:{item_id}")],
@@ -277,7 +280,8 @@ class AdminPanel:
         elif action == "field" and len(parts) == 4 and parts[3] in FIELD_LABELS:
             if self.db.get_property(item_id, active_only=False):
                 self.states[chat_id] = AdminState("edit_field", item_id=item_id, field_name=parts[3])
-                self._send(chat_id, f"Новое значение поля «{FIELD_LABELS[parts[3]]}»: \n/cancel — отмена")
+                hint = f"\n{TITLE_BUTTON_HINT}" if parts[3] == "title" else ""
+                self._send(chat_id, f"Новое значение поля «{FIELD_LABELS[parts[3]]}»:{hint}\n/cancel — отмена")
         elif action == "photos":
             self.photo_menu(chat_id, item_id)
         elif action == "addphoto":
