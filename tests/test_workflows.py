@@ -71,7 +71,7 @@ class WorkflowTests(unittest.TestCase):
             "description": "Помещение в аренду", "features": [],
         }, ["photo_3"])
         self.api = FakeAPI()
-        self.admin = AdminPanel(self.api, self.db, {42})
+        self.admin = AdminPanel(self.api, self.db, {42}, bot.send_detail)
         bot.ACTIVE_DETAILS.clear()
 
     def tearDown(self):
@@ -196,6 +196,51 @@ class WorkflowTests(unittest.TestCase):
         self.db.close()
         self.db = CatalogDB(self.path)
         self.assertEqual(len(self.db.list_properties(active_only=False)), 2)
+
+    def test_draft_preview_shows_card_without_publishing_it(self):
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:add"))
+        for answer in (
+            "Тестовый офис", "95000", "75", "Казань", "Офис",
+            "Короткий текст", "Подробное описание", "Парковка",
+        ):
+            bot.handle_message(self.api, self.db, self.admin, message(42, answer))
+        bot.handle_message(self.api, self.db, self.admin, message(42, photo="file_1"))
+        token = self.admin.states[42].token
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:previewdraft:{token}"))
+        first_preview = next(params for method, params in reversed(self.api.calls) if method == "sendPhoto")
+        self.assertEqual(first_preview["photo"], "file_1")
+        self.assertIn("Тестовый офис", first_preview["caption"])
+        self.assertEqual(len(self.db.list_properties()), 2)
+        self.assertEqual(self.admin.states[42].photos, ["file_1"])
+
+        bot.handle_message(self.api, self.db, self.admin, message(42, photo="file_2"))
+        bot.handle_message(self.api, self.db, self.admin, message(42, "/done"))
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:previewdraft:{token}"))
+        album = next(params for method, params in reversed(self.api.calls) if method == "sendMediaGroup")
+        self.assertEqual([entry["media"] for entry in album["media"]], ["file_1", "file_2"])
+        self.assertEqual(self.admin.states[42].mode, "confirm_create")
+        self.assertEqual(len(self.db.list_properties()), 2)
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 0)
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:save:{token}"))
+        self.assertEqual(len(self.db.list_properties()), 3)
+
+    def test_existing_preview_and_photo_delete_show_selected_photo(self):
+        bot.handle_callback(self.api, self.db, self.admin, callback(43, "adm:preview:1"))
+        self.assertFalse(any(method in ("sendPhoto", "sendMediaGroup") for method, _ in self.api.calls))
+
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:preview:1"))
+        album = next(params for method, params in reversed(self.api.calls) if method == "sendMediaGroup")
+        self.assertEqual([entry["media"] for entry in album["media"]], ["photo_1", "photo_2"])
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 0)
+
+        photo_id = self.db.list_photos(1)[1]["id"]
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:photodel:1:{photo_id}"))
+        selected = next(params for method, params in reversed(self.api.calls) if method == "sendPhoto")
+        self.assertEqual(selected["photo"], "photo_2")
+        self.assertIn("Фото 2 из 2", selected["caption"])
+        self.assertEqual(self.db.get_property(1).photos, ("photo_1", "photo_2"))
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:confirmphotodel:1:{photo_id}"))
+        self.assertEqual(self.db.get_property(1).photos, ("photo_1",))
 
     def test_deleting_all_cards_does_not_reseed(self):
         for item in self.db.list_properties(active_only=False):

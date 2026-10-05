@@ -3,7 +3,9 @@
 import html
 import re
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+
+from models import Property
 
 
 TITLE_BUTTON_HINT = (
@@ -73,10 +75,11 @@ def parse_value(name, raw):
 
 
 class AdminPanel:
-    def __init__(self, api, db, admin_ids):
+    def __init__(self, api, db, admin_ids, preview_sender):
         self.api = api
         self.db = db
         self.admin_ids = set(admin_ids)
+        self.preview_sender = preview_sender
         self.states = {}
 
     def is_admin(self, user_id):
@@ -93,6 +96,32 @@ class AdminPanel:
             [button("🏠 Список объектов", "adm:list")],
             [button("➕ Добавить объект", "adm:add")],
         ])
+
+    def preview_item(self, chat_id, item, *, draft=False):
+        label = "Черновик — ещё не виден посетителям." if draft else "Предпросмотр карточки."
+        self._send(chat_id, f"👁 {label}")
+        self.preview_sender(self.api, chat_id, item)
+        if draft:
+            state = self.states.get(chat_id)
+            if state and state.mode == "confirm_create":
+                self._send(chat_id, "Карточка ещё не сохранена.", [
+                    [button("✅ Сохранить", f"adm:save:{state.token}"), button("❌ Отмена", "adm:cancel")]
+                ])
+            else:
+                self._next_create_prompt(chat_id, state)
+        else:
+            self._send(chat_id, "Вернуться к управлению объектом:", [
+                [button("🖼 Фото", f"adm:photos:{item.id}"), button("← К объекту", f"adm:edit:{item.id}")]
+            ])
+
+    @staticmethod
+    def draft_property(state):
+        values = state.values
+        return Property(
+            0, values["title"], values["price"], values["area"], values["location"],
+            values["rooms"], values["teaser"], values["description"],
+            tuple(values["features"]), tuple(state.photos),
+        )
 
     def list_menu(self, chat_id):
         rows = []
@@ -113,6 +142,7 @@ class AdminPanel:
             [button("Площадь", f"adm:field:{item_id}:area"), button("Локация", f"adm:field:{item_id}:location")],
             [button("Тип помещения", f"adm:field:{item_id}:rooms"), button("Краткое описание", f"adm:field:{item_id}:teaser")],
             [button("Описание", f"adm:field:{item_id}:description"), button("Особенности", f"adm:field:{item_id}:features")],
+            [button("👁 Предпросмотр", f"adm:preview:{item_id}")],
             [button(f"🖼 Фото ({len(item.photos)})", f"adm:photos:{item_id}")],
             [button("Показать" if not self.db.is_active(item_id) else "Скрыть", f"adm:toggle:{item_id}")],
             [button("↑ Выше", f"adm:up:{item_id}"), button("↓ Ниже", f"adm:down:{item_id}")],
@@ -139,6 +169,7 @@ class AdminPanel:
             self.list_menu(chat_id)
             return
         rows = [[button("➕ Добавить фото", f"adm:addphoto:{item_id}")]]
+        rows.append([button("👁 Вся карточка", f"adm:preview:{item_id}")])
         rows.extend(
             [button(f"Удалить фото {index}", f"adm:photodel:{item_id}:{photo['id']}")]
             for index, photo in enumerate(self.db.list_photos(item_id), start=1)
@@ -150,7 +181,8 @@ class AdminPanel:
         if state.step < len(STEPS):
             self._send(chat_id, f"Шаг {state.step + 1}/{len(STEPS)}. {STEPS[state.step][1]}\n/cancel — отмена")
         else:
-            self._send(chat_id, "Пришлите от 1 до 10 фотографий сообщениями. После последней отправьте /done.\n/cancel — отмена")
+            rows = [[button("👁 Предпросмотр", f"adm:previewdraft:{state.token}")]] if state.photos else None
+            self._send(chat_id, "Пришлите от 1 до 10 фотографий сообщениями. После последней отправьте /done.\n/cancel — отмена", rows)
 
     def handle_message(self, message):
         chat_id = message["chat"]["id"]
@@ -193,7 +225,9 @@ class AdminPanel:
                     self._send(chat_id, "Максимум 10 фотографий. Отправьте /done.")
                 else:
                     state.photos.append(message["photo"][-1]["file_id"])
-                    self._send(chat_id, f"Фото добавлено: {len(state.photos)}/10. Пришлите следующее или /done.")
+                    self._send(chat_id, f"Фото добавлено: {len(state.photos)}/10. Пришлите следующее или /done.", [
+                        [button("👁 Предпросмотр", f"adm:previewdraft:{state.token}")]
+                    ])
                 return True
             if command == "/done":
                 if not state.photos:
@@ -201,6 +235,7 @@ class AdminPanel:
                     return True
                 state.mode = "confirm_create"
                 self._send(chat_id, f"Создать «{html.escape(state.values['title'])}» с {len(state.photos)} фото?", [
+                    [button("👁 Предпросмотр", f"adm:previewdraft:{state.token}")],
                     [button("✅ Сохранить", f"adm:save:{state.token}"), button("❌ Отмена", "adm:cancel")]
                 ])
                 return True
@@ -264,6 +299,14 @@ class AdminPanel:
         elif action == "cancel":
             self.states.pop(chat_id, None)
             self.menu(chat_id)
+        elif action == "previewdraft":
+            state = self.states.get(chat_id)
+            if (state and state.mode in ("create", "confirm_create")
+                    and state.step == len(STEPS) and state.photos
+                    and len(parts) == 3 and parts[2] == state.token):
+                self.preview_item(chat_id, self.draft_property(state), draft=True)
+            else:
+                self._send(chat_id, "Черновик уже недоступен.")
         elif action == "save":
             state = self.states.get(chat_id)
             if state and state.mode == "confirm_create" and len(parts) == 3 and parts[2] == state.token:
@@ -277,6 +320,12 @@ class AdminPanel:
             self._send(chat_id, "Не удалось определить объект.")
         elif action == "edit":
             self.edit_menu(chat_id, item_id)
+        elif action == "preview":
+            item = self.db.get_property(item_id, active_only=False)
+            if item:
+                self.preview_item(chat_id, item)
+            else:
+                self._send(chat_id, "Объект уже удалён.")
         elif action == "field" and len(parts) == 4 and parts[3] in FIELD_LABELS:
             if self.db.get_property(item_id, active_only=False):
                 self.states[chat_id] = AdminState("edit_field", item_id=item_id, field_name=parts[3])
@@ -289,8 +338,15 @@ class AdminPanel:
                 self.states[chat_id] = AdminState("add_photo", item_id=item_id)
                 self._send(chat_id, "Пришлите новые фотографии (до 10 всего). После последней отправьте /done.\n/cancel — отмена")
         elif action == "photodel" and len(parts) == 4 and parts[3].isdigit():
-            if any(photo["id"] == int(parts[3]) for photo in self.db.list_photos(item_id)):
-                self._send(chat_id, "Удалить выбранную фотографию?", [
+            item = self.db.get_property(item_id, active_only=False)
+            photos = self.db.list_photos(item_id) if item else []
+            selected = next(((index, photo) for index, photo in enumerate(photos, 1)
+                             if photo["id"] == int(parts[3])), None)
+            if selected:
+                index, photo = selected
+                caption = f"Фото {index} из {len(photos)} · {html.escape(item.title)}"
+                self.preview_sender(self.api, chat_id, replace(item, photos=(photo["media"],)), caption=caption)
+                self._send(chat_id, f"Удалить фото {index}?", [
                     [button("Да, удалить", f"adm:confirmphotodel:{item_id}:{parts[3]}"),
                      button("Отмена", f"adm:photos:{item_id}")]
                 ])

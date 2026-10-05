@@ -195,8 +195,8 @@ def send_catalog(api: TelegramAPI, db: CatalogDB, chat_id: int):
     return api.call("sendMessage", **params)
 
 
-def send_detail(api: TelegramAPI, chat_id: int, item: Property):
-    caption = detail_caption(item)
+def send_detail(api: TelegramAPI, chat_id: int, item: Property, caption=None):
+    caption = detail_caption(item) if caption is None else caption
     try:
         if len(item.photos) >= 2:
             media = [{"type": "photo", "media": photo_url} for photo_url in item.photos[:10]]
@@ -210,7 +210,8 @@ def send_detail(api: TelegramAPI, chat_id: int, item: Property):
             return [api.call("sendPhoto", chat_id=chat_id, photo=item.photos[0], caption=caption, parse_mode="HTML", request_timeout=30)]
         except (BotApiError, OSError, ValueError):
             pass
-    return [api.call("sendMessage", chat_id=chat_id, text=detail_caption(item, photo_unavailable=True), parse_mode="HTML")]
+    fallback = f"{caption}\n\n<i>Фото временно недоступны.</i>"
+    return [api.call("sendMessage", chat_id=chat_id, text=fallback, parse_mode="HTML")]
 
 
 def delete_quietly(api: TelegramAPI, chat_id: int, message_id: int):
@@ -398,7 +399,7 @@ def main():
     except ValueError as exc:
         db.close()
         raise SystemExit(str(exc)) from None
-    admin = AdminPanel(api, db, parse_admin_ids(load_setting(env_file, "ADMIN_IDS")))
+    admin = AdminPanel(api, db, parse_admin_ids(load_setting(env_file, "ADMIN_IDS")), send_detail)
     print(f"Бот @{me['username']} запущен. Откройте его и отправьте /start. Ctrl+C — остановить.", flush=True)
     if not admin.admin_ids:
         print("Админка закрыта: укажите ADMIN_IDS в .env (свой ID покажет команда /id).", flush=True)
