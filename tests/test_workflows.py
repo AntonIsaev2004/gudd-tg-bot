@@ -132,10 +132,24 @@ class WorkflowTests(unittest.TestCase):
             row = old_db.conn.execute("SELECT username, phone_number, phone_shared_at FROM users").fetchone()
             self.assertEqual(row["username"], "old_user")
             self.assertIsNone(row["phone_number"])
-            self.assertEqual(old_db.conn.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(old_db.conn.execute("PRAGMA user_version").fetchone()[0], 5)
             self.assertIn("phone_number", [row["name"] for row in old_db.conn.execute("PRAGMA table_info(user_events)")])
         finally:
             old_db.close()
+
+    def test_visualization_note_removed_from_existing_cards(self):
+        with self.db.conn:
+            self.db.conn.execute(
+                "UPDATE properties SET features_json = ? WHERE id = 1",
+                (json.dumps(["Окупаемость: 10 лет", "Часть изображений — визуализации"], ensure_ascii=False),),
+            )
+            self.db.conn.execute("PRAGMA user_version = 4")
+        self.db.close()
+        self.db = CatalogDB(self.path)
+        item = self.db.get_property(1)
+        self.assertEqual(item.features, ("Окупаемость: 10 лет",))
+        self.assertNotIn("Часть изображений", bot.detail_caption(item))
+        self.assertEqual(self.db.conn.execute("PRAGMA user_version").fetchone()[0], 5)
 
     def test_admin_access_edit_hide_and_order(self):
         bot.handle_message(self.api, self.db, self.admin, message(43, "/admin"))

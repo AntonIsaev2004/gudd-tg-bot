@@ -154,7 +154,7 @@ class ReportingTests(unittest.TestCase):
         migrated = CatalogDB(old_path)
         try:
             self.assertEqual(migrated.conn.execute("SELECT phone_number FROM user_events WHERE id = 1").fetchone()[0], "+79991234567")
-            self.assertEqual(migrated.conn.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(migrated.conn.execute("PRAGMA user_version").fetchone()[0], 5)
             self.assertIsNone(migrated.last_report_period_end())
         finally:
             migrated.close()

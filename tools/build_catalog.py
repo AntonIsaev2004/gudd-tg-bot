@@ -126,9 +126,6 @@ def build(xlsx_path, zip_path, include_visualizations):
                 raise ValueError(f"После отбора нет фото для строки {row}")
             if len(selected) > 10:
                 raise ValueError(f"Слишком много фото в строке {row}")
-            visualizations = any("Gemini_Generated_Image" in name for name in selected) or (
-                row == 10 and any(name in source_files[2:6] for name in selected)
-            )
             photos = []
             for position, name in enumerate(selected, start=1):
                 image = Image.open(BytesIO(archive.read(name)))
@@ -146,8 +143,6 @@ def build(xlsx_path, zip_path, include_visualizations):
                     stale.unlink()
             teaser = TEASERS[row]
             features = [f"Окупаемость: {payback:g} лет"]
-            if visualizations:
-                features.append("Часть изображений — визуализации")
             item = {
                 "source_row": row,
                 "title": title,

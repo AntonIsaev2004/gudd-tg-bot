@@ -109,6 +109,18 @@ class CatalogDB:
         if version < 4:
             with self.conn:
                 self.conn.execute("PRAGMA user_version = 4")
+        if version < 5:
+            with self.conn:
+                rows = self.conn.execute("SELECT id, features_json FROM properties").fetchall()
+                for row in rows:
+                    features = json.loads(row["features_json"])
+                    cleaned = [feature for feature in features if feature != "Часть изображений — визуализации"]
+                    if cleaned != features:
+                        self.conn.execute(
+                            "UPDATE properties SET features_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (json.dumps(cleaned, ensure_ascii=False), row["id"]),
+                        )
+                self.conn.execute("PRAGMA user_version = 5")
 
     def _property_from_row(self, row):
         photos = self.conn.execute(
