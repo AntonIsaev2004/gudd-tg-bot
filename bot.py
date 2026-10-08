@@ -191,7 +191,6 @@ def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str
         f"<b>{html.escape(item.title)}</b>",
         f"<b>{amount}</b>",
         "",
-        f"📍 {html.escape(item.location)}",
         f"📐 {format_area(item.area)} м²" + (f"  ·  🏢 {html.escape(item.rooms)}" if item.rooms else ""),
         "",
         html.escape(item.description),
