@@ -56,7 +56,7 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("Просмотров объектов: 3", body)
         self.assertIn("Уникальных посетителей: 1", body)
         self.assertIn("Офис первый: 2 просмотра, 1 посетитель", body)
-        self.assertIn("Офис первый · Иван Иванов · @buyer", body)
+        self.assertIn("Офис первый:\n  Иван Иванов · @buyer", body)
         self.assertNotRegex(body, r"(?m)^#\d+\b")
         self.assertNotIn("телефон", body)
         self.assertNotIn("Telegram ID", body)
@@ -64,11 +64,36 @@ class ReportingTests(unittest.TestCase):
         self.assertIn('href="https://t.me/buyer"', html_body)
         self.assertNotIn("Telegram ID", html_body)
         self.assertNotIn("телефон", html_body)
-        self.assertEqual(sum("Офис первый · Иван Иванов" in line for line in body.splitlines()), 1)
+        self.assertEqual(sum("Иван Иванов · @buyer" in line for line in body.splitlines()), 2)
         _, next_body, _ = report_content(self.db, monday, thursday)
         self.assertIn("Просмотров объектов: 2", next_body)
         self.assertIn("Уникальных посетителей: 1", next_body)
         self.assertNotIn("Иван Иванов", next_body)
+
+    def test_visitors_share_one_compact_table_per_property(self):
+        with self.db.conn:
+            self.db.conn.execute(
+                """INSERT INTO user_events(telegram_id, event_type, property_id, created_at)
+                   VALUES (?, 'property_opened', ?, ?)""",
+                (101, 1, "2026-10-02 13:00:00"),
+            )
+        _, body, html_body = report_content(
+            self.db,
+            datetime(2026, 10, 1, 10, tzinfo=MOSCOW),
+            datetime(2026, 10, 5, 10, tzinfo=MOSCOW),
+        )
+        visitors_html = html_body.split('>Посетители по объектам</h2>', 1)[1]
+        first_property = visitors_html.split('>Офис второй</h3>', 1)[0]
+        self.assertEqual(first_property.count('>Офис первый</h3>'), 1)
+        self.assertEqual(first_property.count('<table'), 1)
+        self.assertEqual(first_property.count('<tr>'), 2)
+        self.assertIn('href="https://t.me/buyer"', first_property)
+        self.assertIn('href="https://t.me/guest"', first_property)
+        self.assertIn('>2</td>', first_property)
+        self.assertIn('02.10 16:00', first_property)
+        self.assertNotIn('02.10.2026 16:00', first_property)
+        self.assertIn("Офис первый:\n  Иван Иванов", body)
+        self.assertIn("\n  Анна · @guest", body)
 
     def test_html_escapes_card_and_profile_text_and_handles_missing_nick(self):
         self.db.update_property(1, "title", "Дом <у реки>")

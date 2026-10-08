@@ -60,10 +60,10 @@ def _utc_db_time(value):
     return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _local_db_time(value):
+def _local_db_time(value, *, short=False):
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
         tzinfo=timezone.utc
-    ).astimezone(MOSCOW).strftime("%d.%m.%Y %H:%M")
+    ).astimezone(MOSCOW).strftime("%d.%m %H:%M" if short else "%d.%m.%Y %H:%M")
 
 
 def _one_line(value):
@@ -79,7 +79,7 @@ def _count(value, singular, few, many):
 
 def _report_html(period, views_count, visitors_count, properties, visitors):
     property_rows = []
-    for title, views, people in properties:
+    for _item_id, title, views, people in properties:
         property_rows.append(
             '<tr>'
             f'<td style="padding:9px 6px;border-bottom:1px solid #e5e7eb;word-break:break-word;">{html.escape(title)}</td>'
@@ -88,41 +88,50 @@ def _report_html(period, views_count, visitors_count, properties, visitors):
             '</tr>'
         )
 
-    cards = []
+    visitors_by_property = {}
     for visitor in visitors:
-        username = visitor["username"]
-        if username:
-            label = html.escape(f"@{username}")
-            if USERNAME_PATTERN.fullmatch(username):
+        visitors_by_property.setdefault(visitor["property_id"], []).append(visitor)
+
+    visitor_tables = []
+    for item_id, title, _views, _people in properties:
+        group = visitors_by_property.get(item_id)
+        if not group:
+            continue
+        rows = []
+        for visitor in group:
+            username = visitor["username"]
+            if username:
+                label = html.escape(f"@{username}")
                 nickname = (
                     f'<a href="https://t.me/{username}" '
                     f'style="color:#1d4ed8;text-decoration:underline;">{label}</a>'
+                    if USERNAME_PATTERN.fullmatch(username) else label
                 )
             else:
-                nickname = label
-        else:
-            nickname = "не указан"
-        rows = (
-            ("Имя", html.escape(visitor["name"])),
-            ("Ник", nickname),
-            ("Просмотры", str(visitor["views"])),
-            ("Первый", html.escape(visitor["first"])),
-            ("Последний", html.escape(visitor["last"])),
+                nickname = "ник не указан"
+            rows.append(
+                '<tr>'
+                '<th scope="row" align="left" style="padding:8px 5px;border-bottom:1px solid #e5e7eb;'
+                'vertical-align:top;word-break:break-word;font-weight:normal;">'
+                f'<strong>{html.escape(visitor["name"])}</strong><br>{nickname}</th>'
+                '<td align="center" style="padding:8px 3px;border-bottom:1px solid #e5e7eb;vertical-align:top;">'
+                f'{visitor["views"]}</td>'
+                '<td style="padding:8px 5px;border-bottom:1px solid #e5e7eb;vertical-align:top;'
+                'font-size:12px;white-space:nowrap;">'
+                f'{html.escape(visitor["first_short"])}<br>{html.escape(visitor["last_short"])}</td>'
+                '</tr>'
+            )
+        visitor_tables.append(
+            f'<h3 style="margin:18px 0 7px;font-size:16px;">{html.escape(title)}</h3>'
+            '<table width="100%" cellpadding="0" cellspacing="0" '
+            'style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:13px;">'
+            '<thead><tr style="background:#f3f4f6;">'
+            '<th scope="col" align="left" width="42%" style="padding:8px 5px;">Посетитель</th>'
+            '<th scope="col" align="center" width="16%" style="padding:8px 3px;">Просм.</th>'
+            '<th scope="col" align="left" width="42%" style="padding:8px 5px;">Первый / последний</th>'
+            '</tr></thead><tbody>' + "".join(rows) + '</tbody></table>'
         )
-        details = "".join(
-            '<tr>'
-            f'<th scope="row" align="left" width="34%" style="padding:7px 8px;color:#6b7280;font-weight:normal;vertical-align:top;">{label}</th>'
-            f'<td style="padding:7px 8px;word-break:break-word;">{value}</td>'
-            '</tr>'
-            for label, value in rows
-        )
-        cards.append(
-            '<div style="margin:12px 0;padding:12px;border:1px solid #e5e7eb;border-radius:8px;">'
-            f'<h3 style="margin:0 0 8px;font-size:16px;">{html.escape(visitor["title"])}</h3>'
-            f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;">{details}</table>'
-            '</div>'
-        )
-    visitor_section = "".join(cards) if cards else '<p>За период просмотров не было.</p>'
+    visitor_section = "".join(visitor_tables) if visitor_tables else '<p>За период просмотров не было.</p>'
     return (
         '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1"></head>'
@@ -178,7 +187,7 @@ def report_content(db, start_local, end_local):
     for item_id, rows in by_property.items():
         visitor_count = len({row["telegram_id"] for row in rows})
         title = titles.get(item_id, "(объект удалён)")
-        property_summaries.append((title, len(rows), visitor_count))
+        property_summaries.append((item_id, title, len(rows), visitor_count))
         lines.append(
             f"{title}: "
             f"{_count(len(rows), 'просмотр', 'просмотра', 'просмотров')}, "
@@ -186,8 +195,6 @@ def report_content(db, start_local, end_local):
         )
 
     lines.extend(("", "Посетители по объектам:"))
-    if not by_visitor:
-        lines.append("За период просмотров не было.")
     visitor_summaries = []
     for (item_id, _user_id), entry in by_visitor.items():
         row = entry["row"]
@@ -195,18 +202,26 @@ def report_content(db, start_local, end_local):
             part for part in (_one_line(row["first_name"]), _one_line(row["last_name"])) if part != "—"
         ) or "Имя не указано"
         username = _one_line(row["username"]) if row["username"] else ""
-        nickname = f"@{username}" if username else "ник не указан"
-        title = titles.get(item_id, "(объект удалён)")
         first = _local_db_time(entry["first"])
         last = _local_db_time(entry["last"])
         visitor_summaries.append({
-            "title": title, "name": full_name, "username": username,
+            "property_id": item_id, "name": full_name, "username": username,
             "views": entry["count"], "first": first, "last": last,
+            "first_short": _local_db_time(entry["first"], short=True),
+            "last_short": _local_db_time(entry["last"], short=True),
         })
-        lines.append(
-            f"{title} · {full_name} · {nickname} · "
-            f"просмотров {entry['count']} · первый {first} · последний {last}"
-        )
+    if not visitor_summaries:
+        lines.append("За период просмотров не было.")
+    for item_id, title, _views, _people in property_summaries:
+        group = [visitor for visitor in visitor_summaries if visitor["property_id"] == item_id]
+        if group:
+            lines.append(f"{title}:")
+            for visitor in group:
+                nickname = f"@{visitor['username']}" if visitor["username"] else "ник не указан"
+                lines.append(
+                    f"  {visitor['name']} · {nickname} · просмотров {visitor['views']} · "
+                    f"первый {visitor['first']} · последний {visitor['last']}"
+                )
     return subject, "\n".join(lines) + "\n", _report_html(
         period, len(visits), len(unique_visitors), property_summaries, visitor_summaries
     )
