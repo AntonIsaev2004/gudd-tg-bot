@@ -1,6 +1,7 @@
 """Общая модель карточки недвижимости."""
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -15,3 +16,4 @@ class Property:
     description: str
     features: tuple
     photos: tuple
+    sale_price: Optional[int] = None

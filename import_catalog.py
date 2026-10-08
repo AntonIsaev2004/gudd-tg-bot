@@ -5,7 +5,6 @@ import json
 import sqlite3
 from pathlib import Path
 
-from bot import load_setting
 from storage import CatalogDB
 
 
@@ -20,6 +19,7 @@ def validated_catalog():
     items = catalog.get("items")
     if not isinstance(batch_id, str) or not batch_id or not isinstance(items, list) or not items:
         raise ValueError("Некорректный catalog.json")
+    source_rows = set()
     for item in items:
         if not isinstance(item, dict):
             raise ValueError("Некорректная карточка в catalog.json")
@@ -30,6 +30,15 @@ def validated_catalog():
                 raise ValueError(f"Некорректное поле {key} в catalog.json")
         if type(item.get("price")) is not int or item["price"] <= 0:
             raise ValueError("Некорректная аренда в catalog.json")
+        if type(item.get("sale_price")) is not int or not 0 < item["sale_price"] < 10**15:
+            raise ValueError("Некорректная цена продажи в catalog.json")
+        source_row = item.get("source_row")
+        if type(source_row) is not int or source_row < 2 or source_row in source_rows:
+            raise ValueError("Некорректная или повторная исходная строка в catalog.json")
+        source_rows.add(source_row)
+        for key in ("previous_title", "previous_location"):
+            if key in item and (not isinstance(item[key], str) or not item[key] or len(item[key]) > 100):
+                raise ValueError(f"Некорректное поле {key} в catalog.json")
         if type(item.get("area")) not in (int, float) or item["area"] <= 0:
             raise ValueError("Некорректная площадь в catalog.json")
         features = item.get("features")
@@ -53,6 +62,7 @@ def validated_catalog():
 
 
 def main():
+    from bot import load_setting
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Записать объекты в базу данных")
     args = parser.parse_args()
@@ -71,7 +81,7 @@ def main():
     try:
         imported, removed = db.import_catalog(batch_id, items)
         if imported:
-            print(f"Загружено {len(items)} объектов.")
+            print(f"Каталог обновлён: {len(items)} объектов. ID и история существующих карточек сохранены.")
         else:
             print("Эта партия уже загружена. Повторных карточек нет.")
         print(f"Удалено демонстрационных карточек: {removed} (включая связанные с ними просмотры).")

@@ -15,6 +15,7 @@ from urllib import error, request
 from urllib.parse import urlsplit
 
 from admin import AdminPanel
+from import_catalog import validated_catalog
 from models import Property
 from reporting import load_report_settings, send_due_report
 from storage import CatalogDB
@@ -28,6 +29,7 @@ class DetailView:
     item_id: int
     media_ids: tuple
     controls_id: int
+    mode: str = "rent"
 
 
 ACTIVE_DETAILS = {}  # chat_id -> открытая карточка и сообщения, которые нужно убрать
@@ -142,34 +144,49 @@ def format_area(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
 
-def catalog(db: CatalogDB):
+def home():
+    return "🏠 Объекты", {"inline_keyboard": [
+        [button("Объекты. Аренда", "catalog:rent")],
+        [button("Объекты. Продажа", "catalog:sale")],
+    ]}
+
+
+def catalog(db: CatalogDB, mode: str = "rent"):
     rows = []
     for item in db.list_properties():
-        amount = f"{price(item.price)}/мес."
-        label = f"{item.title} · {format_area(item.area)} м² · {amount}"
-        rows.append([button(label, f"show:{item.id}")])
+        if mode == "sale":
+            amount = price(item.sale_price) if item.sale_price else "Цена по запросу"
+        else:
+            amount = f"{price(item.price)}/мес."
+        label = f"{item.location} · {format_area(item.area)} м² · {amount}"
+        rows.append([button(label, f"show:{mode}:{item.id}")])
+    text = "🏠 Объекты. " + ("Продажа" if mode == "sale" else "Аренда")
     if not rows:
-        return "🏠 Пока нет доступных объектов.", None
-    return "🏠 Объекты", {"inline_keyboard": rows}
+        text = "🏠 Пока нет доступных объектов."
+    rows.append([button("← Аренда / продажа", "home")])
+    return text, {"inline_keyboard": rows}
 
 
-def detail_controls(db: CatalogDB, item: Property):
+def detail_controls(db: CatalogDB, item: Property, mode: str = "rent"):
     items = db.list_properties()
     index = next(i for i, candidate in enumerate(items) if candidate.id == item.id)
     rows = []
     if len(items) > 1:
         previous_item = items[(index - 1) % len(items)]
         next_item = items[(index + 1) % len(items)]
-        rows.append([button("← Предыдущий", f"view:{previous_item.id}"), button("Следующий →", f"view:{next_item.id}")])
+        rows.append([button("← Предыдущий", f"view:{mode}:{previous_item.id}"), button("Следующий →", f"view:{mode}:{next_item.id}")])
     rows.extend([
-        [button("← К списку объектов", f"back:{item.id}")],
+        [button("← К списку объектов", f"back:{mode}:{item.id}")],
         [{"text": "💬 Связаться с менеджером", "url": "https://t.me/gudd_manager"}],
     ])
     return f"Объект {index + 1} из {len(items)}", {"inline_keyboard": rows}
 
 
-def detail_caption(item: Property, photo_unavailable: bool = False):
-    amount = f"Аренда: {price(item.price)}/мес. с НДС"
+def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str = "rent"):
+    if mode == "sale":
+        amount = f"Продажа: {price(item.sale_price)}" if item.sale_price else "Продажа: цена по запросу"
+    else:
+        amount = f"Аренда: {price(item.price)}/мес. с НДС"
     lines = [
         f"<b>{html.escape(item.title)}</b>",
         f"<b>{amount}</b>",
@@ -187,16 +204,21 @@ def detail_caption(item: Property, photo_unavailable: bool = False):
     return "\n".join(lines)
 
 
-def send_catalog(api: TelegramAPI, db: CatalogDB, chat_id: int):
-    text, markup = catalog(db)
+def send_home(api: TelegramAPI, chat_id: int):
+    text, markup = home()
+    return api.call("sendMessage", chat_id=chat_id, text=text, reply_markup=markup)
+
+
+def send_catalog(api: TelegramAPI, db: CatalogDB, chat_id: int, mode: str = "rent"):
+    text, markup = catalog(db, mode)
     params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if markup:
         params["reply_markup"] = markup
     return api.call("sendMessage", **params)
 
 
-def send_detail(api: TelegramAPI, chat_id: int, item: Property, caption=None):
-    caption = detail_caption(item) if caption is None else caption
+def send_detail(api: TelegramAPI, chat_id: int, item: Property, caption=None, *, mode: str = "rent"):
+    caption = detail_caption(item, mode=mode) if caption is None else caption
     try:
         if len(item.photos) >= 2:
             media = [{"type": "photo", "media": photo_url} for photo_url in item.photos[:10]]
@@ -227,10 +249,10 @@ def delete_detail(api: TelegramAPI, chat_id: int, detail: DetailView):
     delete_quietly(api, chat_id, detail.controls_id)
 
 
-def show_detail(api: TelegramAPI, db: CatalogDB, chat_id: int, item: Property, source_message_id: int):
-    sent = send_detail(api, chat_id, item)
+def show_detail(api: TelegramAPI, db: CatalogDB, chat_id: int, item: Property, source_message_id: int, mode: str = "rent"):
+    sent = send_detail(api, chat_id, item, mode=mode)
     media_ids = tuple(message["message_id"] for message in sent)
-    text, markup = detail_controls(db, item)
+    text, markup = detail_controls(db, item, mode)
     try:
         controls = api.call("sendMessage", chat_id=chat_id, text=text, reply_markup=markup)
     except BotApiError:
@@ -239,7 +261,7 @@ def show_detail(api: TelegramAPI, db: CatalogDB, chat_id: int, item: Property, s
         raise
 
     previous = ACTIVE_DETAILS.get(chat_id)
-    ACTIVE_DETAILS[chat_id] = DetailView(item.id, media_ids, controls["message_id"])
+    ACTIVE_DETAILS[chat_id] = DetailView(item.id, media_ids, controls["message_id"], mode)
     if previous:
         delete_detail(api, chat_id, previous)
     if not previous or source_message_id != previous.controls_id:
@@ -260,13 +282,13 @@ def handle_message(api: TelegramAPI, db: CatalogDB, admin: AdminPanel, message: 
     if admin.handle_message(message):
         return
     if command in ("/start", "/catalog"):
-        send_catalog(api, db, chat_id)
+        send_home(api, chat_id)
         db.record_event(user_id, "bot_started" if command == "/start" else "catalog_opened")
         previous = ACTIVE_DETAILS.pop(chat_id, None)
         if previous:
             delete_detail(api, chat_id, previous)
     elif command == "/help":
-        lines = ["/start или /catalog — список объектов", "/help — список команд", "/id — ваш Telegram ID"]
+        lines = ["/start или /catalog — выбор аренды или продажи", "/help — список команд", "/id — ваш Telegram ID"]
         if admin.is_admin(user_id):
             lines.extend(("/admin — управление объектами", "/cancel — отмена ввода в админке",
                           "/done — завершить загрузку фото", "/skip — пропустить необязательное поле"))
@@ -291,14 +313,20 @@ def handle_callback(api: TelegramAPI, db: CatalogDB, admin: AdminPanel, query: d
     chat_id = chat["id"]
     message_id = message["message_id"]
     previous = ACTIVE_DETAILS.get(chat_id)
-    if (len(parts) == 2 and parts[0] in ("view", "back") and previous
+    if (parts[0] in ("view", "back") and previous
             and message_id != previous.controls_id):
         api.call("answerCallbackQuery", callback_query_id=query_id, text="Эта карточка устарела. Откройте актуальную.")
         return
 
-    if ((len(parts) == 2 and parts[0] in ("show", "view") and parts[1].isdigit()) or
+    mode = "rent"
+    item_id = None
+    if len(parts) == 3 and parts[0] in ("show", "view", "back") and parts[1] in ("rent", "sale") and parts[2].isdigit():
+        mode, item_id = parts[1], int(parts[2])
+    elif ((len(parts) == 2 and parts[0] in ("show", "view", "back") and parts[1].isdigit()) or
             (len(parts) == 4 and parts[0] in ("show", "open") and all(part.isdigit() for part in parts[1:]))):
-        item = db.get_property(int(parts[1]))
+        item_id = int(parts[1])
+    if item_id is not None and parts[0] != "back":
+        item = db.get_property(item_id)
         if item is None:
             api.call("answerCallbackQuery", callback_query_id=query_id, text="Объект больше не доступен.", show_alert=True)
             return
@@ -306,14 +334,23 @@ def handle_callback(api: TelegramAPI, db: CatalogDB, admin: AdminPanel, query: d
         item = None
 
     api.call("answerCallbackQuery", callback_query_id=query_id)
-    if len(parts) == 2 and parts[0] == "catalog" and parts[1].isdigit():
-        text, markup = catalog(db)
+    if data == "home" or (len(parts) == 2 and parts[0] == "catalog" and (parts[1] in ("rent", "sale") or parts[1].isdigit())):
+        if data == "home":
+            text, markup = home()
+        else:
+            mode = parts[1] if parts[1] in ("rent", "sale") else "rent"
+            text, markup = catalog(db, mode)
+            db.record_event(user_id, "catalog_opened")
         params = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
         if markup:
             params["reply_markup"] = markup
-        api.call("editMessageText", **params)
-    elif len(parts) == 2 and parts[0] == "back" and parts[1].isdigit():
-        send_catalog(api, db, chat_id)
+        try:
+            api.call("editMessageText", **params)
+        except BotApiError as exc:
+            if "message is not modified" not in exc.description:
+                raise
+    elif item_id is not None and parts[0] == "back":
+        send_catalog(api, db, chat_id, mode)
         db.record_event(user_id, "catalog_opened")
         previous = ACTIVE_DETAILS.pop(chat_id, None)
         if previous:
@@ -321,7 +358,7 @@ def handle_callback(api: TelegramAPI, db: CatalogDB, admin: AdminPanel, query: d
         else:
             delete_quietly(api, chat_id, message_id)
     elif item is not None:
-        show_detail(api, db, chat_id, item, message_id)
+        show_detail(api, db, chat_id, item, message_id, mode)
         db.record_event(user_id, "property_opened", item.id)
 
 
@@ -394,6 +431,14 @@ def main():
         db = CatalogDB(db_path)
     except (OSError, sqlite3.Error):
         raise SystemExit(f"Не удалось открыть базу данных: {db_path}") from None
+    try:
+        batch_id, items = validated_catalog()
+        imported, _ = db.import_catalog(batch_id, items)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        db.close()
+        raise SystemExit(f"Не удалось обновить каталог: {exc}") from None
+    if imported:
+        print(f"Каталог обновлён: {len(items)} объектов. ID и история существующих карточек сохранены.", flush=True)
     try:
         report_settings = load_report_settings(env_file, load_setting)
     except ValueError as exc:

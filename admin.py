@@ -8,23 +8,24 @@ from dataclasses import dataclass, field, replace
 from models import Property
 
 
-TITLE_BUTTON_HINT = (
-    "Ориентир для кнопки — до 20 символов в названии: рядом будут площадь и аренда. "
-    "Длинное название может обрезаться на телефоне."
+ADDRESS_BUTTON_HINT = (
+    "Этот адрес будет на кнопке в каталоге рядом с площадью и ценой. "
+    "Длинный текст может обрезаться на телефоне; полного адреса это не меняет."
 )
 
 STEPS = (
-    ("title", f"Название объекта (до 80 символов):\n{TITLE_BUTTON_HINT}"),
+    ("title", "Название объекта (до 80 символов):"),
     ("price", "Аренда в месяц с НДС, в рублях (например, 70100):"),
+    ("sale_price", "Цена продажи, в рублях (например, 10100000):"),
     ("area", "Площадь в м² (например, 82 или 82,5):"),
-    ("location", "Локация или адрес (до 100 символов):"),
+    ("location", f"Адрес объекта (до 100 символов):\n{ADDRESS_BUTTON_HINT}"),
     ("rooms", "Тип помещения (например, «офис»):"),
     ("teaser", "Краткое описание (до 200 символов). Если не нужно — /skip:"),
     ("description", "Полное описание для карточки (до 800 символов):"),
     ("features", "Особенности через запятую (до 5 пунктов). Если не нужны — /skip:"),
 )
 FIELD_LABELS = {
-    "title": "Название", "price": "Аренда в месяц", "area": "Площадь", "location": "Локация",
+    "title": "Название", "price": "Аренда в месяц", "sale_price": "Цена продажи", "area": "Площадь", "location": "Адрес",
     "rooms": "Тип помещения", "teaser": "Краткое описание", "description": "Описание",
     "features": "Особенности",
 }
@@ -48,10 +49,10 @@ def button(label, data):
 
 def parse_value(name, raw):
     value = raw.strip()
-    if name == "price":
+    if name in ("price", "sale_price"):
         normalized = re.sub(r"[\s\u00a0]", "", value)
         if len(normalized) > 15 or not normalized.isdecimal() or not 0 < int(normalized) < 10**15:
-            raise ValueError("Введите аренду целым числом от 1 до 999 999 999 999 999 рублей в месяц.")
+            raise ValueError("Введите цену целым числом от 1 до 999 999 999 999 999 рублей.")
         return int(normalized)
     if name == "area":
         normalized = re.sub(r"[\s\u00a0]", "", value).replace(",", ".")
@@ -97,10 +98,15 @@ class AdminPanel:
             [button("➕ Добавить объект", "adm:add")],
         ])
 
-    def preview_item(self, chat_id, item, *, draft=False):
+    def preview_item(self, chat_id, item, *, draft=False, mode="rent"):
         label = "Черновик — ещё не виден посетителям." if draft else "Предпросмотр карточки."
         self._send(chat_id, f"👁 {label}")
-        self.preview_sender(self.api, chat_id, item)
+        self.preview_sender(self.api, chat_id, item, mode=mode)
+        state = self.states.get(chat_id) if draft else None
+        prefix = f"adm:previewdraft:{state.token}" if state else f"adm:preview:{item.id}"
+        self._send(chat_id, "Предпросмотр цены:", [
+            [button("Аренда", f"{prefix}:rent"), button("Продажа", f"{prefix}:sale")]
+        ])
         if draft:
             state = self.states.get(chat_id)
             if state and state.mode == "confirm_create":
@@ -121,6 +127,7 @@ class AdminPanel:
             0, values["title"], values["price"], values["area"], values["location"],
             values["rooms"], values["teaser"], values["description"],
             tuple(values["features"]), tuple(state.photos),
+            sale_price=values["sale_price"],
         )
 
     def list_menu(self, chat_id):
@@ -138,8 +145,9 @@ class AdminPanel:
             self.list_menu(chat_id)
             return
         rows = [
-            [button("Название", f"adm:field:{item_id}:title"), button("Аренда в месяц", f"adm:field:{item_id}:price")],
-            [button("Площадь", f"adm:field:{item_id}:area"), button("Локация", f"adm:field:{item_id}:location")],
+            [button("Название", f"adm:field:{item_id}:title"), button("Адрес", f"adm:field:{item_id}:location")],
+            [button("Аренда в месяц", f"adm:field:{item_id}:price"), button("Цена продажи", f"adm:field:{item_id}:sale_price")],
+            [button("Площадь", f"adm:field:{item_id}:area")],
             [button("Тип помещения", f"adm:field:{item_id}:rooms"), button("Краткое описание", f"adm:field:{item_id}:teaser")],
             [button("Описание", f"adm:field:{item_id}:description"), button("Особенности", f"adm:field:{item_id}:features")],
             [button("👁 Предпросмотр", f"adm:preview:{item_id}")],
@@ -151,10 +159,12 @@ class AdminPanel:
         ]
         description = html.escape(item.description)
         amount = f"Аренда: {item.price:,} ₽/мес. с НДС"
+        sale = f"Продажа: {item.sale_price:,} ₽" if item.sale_price else "Продажа: цена по запросу"
         self._send(
             chat_id,
             f"<b>#{item.id} {html.escape(item.title)}</b>\n"
             f"{amount} · {format(item.area, 'g').replace('.', ',')} м²\n"
+            f"{sale}\n"
             f"{html.escape(item.location)} · {html.escape(item.rooms)}\n"
             f"Статус: {'показывается' if self.db.is_active(item_id) else 'скрыт'}\n\n"
             f"Кратко: {html.escape(item.teaser or '—')}\n"
@@ -303,8 +313,9 @@ class AdminPanel:
             state = self.states.get(chat_id)
             if (state and state.mode in ("create", "confirm_create")
                     and state.step == len(STEPS) and state.photos
-                    and len(parts) == 3 and parts[2] == state.token):
-                self.preview_item(chat_id, self.draft_property(state), draft=True)
+                    and len(parts) in (3, 4) and parts[2] == state.token
+                    and (len(parts) == 3 or parts[3] in ("rent", "sale"))):
+                self.preview_item(chat_id, self.draft_property(state), draft=True, mode=parts[3] if len(parts) == 4 else "rent")
             else:
                 self._send(chat_id, "Черновик уже недоступен.")
         elif action == "save":
@@ -320,16 +331,16 @@ class AdminPanel:
             self._send(chat_id, "Не удалось определить объект.")
         elif action == "edit":
             self.edit_menu(chat_id, item_id)
-        elif action == "preview":
+        elif action == "preview" and (len(parts) == 3 or (len(parts) == 4 and parts[3] in ("rent", "sale"))):
             item = self.db.get_property(item_id, active_only=False)
             if item:
-                self.preview_item(chat_id, item)
+                self.preview_item(chat_id, item, mode=parts[3] if len(parts) == 4 else "rent")
             else:
                 self._send(chat_id, "Объект уже удалён.")
         elif action == "field" and len(parts) == 4 and parts[3] in FIELD_LABELS:
             if self.db.get_property(item_id, active_only=False):
                 self.states[chat_id] = AdminState("edit_field", item_id=item_id, field_name=parts[3])
-                hint = f"\n{TITLE_BUTTON_HINT}" if parts[3] == "title" else ""
+                hint = f"\n{ADDRESS_BUTTON_HINT}" if parts[3] == "location" else ""
                 self._send(chat_id, f"Новое значение поля «{FIELD_LABELS[parts[3]]}»:{hint}\n/cancel — отмена")
         elif action == "photos":
             self.photo_menu(chat_id, item_id)

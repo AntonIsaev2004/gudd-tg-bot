@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import re
 from pathlib import Path
 
 from models import Property
@@ -121,6 +122,24 @@ class CatalogDB:
                             (json.dumps(cleaned, ensure_ascii=False), row["id"]),
                         )
                 self.conn.execute("PRAGMA user_version = 5")
+        if version < 6:
+            with self.conn:
+                columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(properties)")}
+                if "sale_price" not in columns:
+                    self.conn.execute("ALTER TABLE properties ADD COLUMN sale_price INTEGER CHECK (sale_price IS NULL OR sale_price > 0)")
+                if "source_row" not in columns:
+                    self.conn.execute("ALTER TABLE properties ADD COLUMN source_row INTEGER")
+                self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_property_source_row ON properties(source_row) WHERE source_row IS NOT NULL")
+                rows = self.conn.execute("SELECT id, features_json FROM properties").fetchall()
+                for row in rows:
+                    features = json.loads(row["features_json"])
+                    cleaned = [feature for feature in features if not re.fullmatch(
+                        r"Окупаемость\s*:?\s*10\s*лет", feature, re.IGNORECASE
+                    )]
+                    if cleaned != features:
+                        self.conn.execute("UPDATE properties SET features_json = ? WHERE id = ?",
+                                          (json.dumps(cleaned, ensure_ascii=False), row["id"]))
+                self.conn.execute("PRAGMA user_version = 6")
 
     def _property_from_row(self, row):
         photos = self.conn.execute(
@@ -130,6 +149,7 @@ class CatalogDB:
             row["id"], row["title"], row["price"], row["area"], row["location"],
             row["rooms"], row["teaser"], row["description"],
             tuple(json.loads(row["features_json"])), tuple(photo["media"] for photo in photos),
+            sale_price=row["sale_price"],
         )
 
     def list_properties(self, active_only=True):
@@ -155,11 +175,11 @@ class CatalogDB:
             order = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM properties").fetchone()[0]
             cursor = self.conn.execute(
                 """INSERT INTO properties
-                   (title, price, area, location, rooms, teaser, description, features_json, sort_order)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (title, price, area, location, rooms, teaser, description, features_json, sort_order, sale_price)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (values["title"], values["price"], values["area"], values["location"],
                  values["rooms"], values["teaser"], values["description"],
-                 json.dumps(values["features"], ensure_ascii=False), order),
+                 json.dumps(values["features"], ensure_ascii=False), order, values.get("sale_price")),
             )
             item_id = cursor.lastrowid
             self.conn.executemany(
@@ -169,7 +189,7 @@ class CatalogDB:
         return item_id
 
     def import_catalog(self, batch_id, items):
-        """Загружает каталог один раз и удаляет старые демо-карточки с их просмотрами."""
+        """Применяет партию один раз, обновляя исходные карточки с сохранением ID и истории."""
         with self.conn:
             imported = self.conn.execute(
                 "SELECT 1 FROM catalog_imports WHERE batch_id = ?", (batch_id,)
@@ -177,18 +197,47 @@ class CatalogDB:
             if not imported:
                 order = self.conn.execute("SELECT COALESCE(MIN(sort_order), 0) - ? FROM properties", (len(items),)).fetchone()[0]
                 for item in items:
-                    cursor = self.conn.execute(
-                        """INSERT INTO properties
-                           (title, price, area, location, rooms, teaser, description,
-                            features_json, sort_order, is_active, is_demo)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)""",
-                        (item["title"], item["price"], item["area"], item["location"],
-                         item["rooms"], item["teaser"], item["description"],
-                         json.dumps(item["features"], ensure_ascii=False), order),
-                    )
+                    source_row = item.get("source_row")
+                    matched = self.conn.execute(
+                        "SELECT id FROM properties WHERE source_row = ?", (source_row,)
+                    ).fetchone() if source_row is not None else None
+                    if matched is None and source_row is not None:
+                        candidates = self.conn.execute(
+                            """SELECT DISTINCT p.id FROM properties p JOIN property_photos f ON f.property_id = p.id
+                               WHERE p.is_demo = 0 AND p.source_row IS NULL AND f.media LIKE ?""",
+                            (f"media/object_{source_row:02d}/%",),
+                        ).fetchall()
+                        if not candidates and item.get("previous_title") and item.get("previous_location"):
+                            candidates = self.conn.execute(
+                                """SELECT id FROM properties WHERE is_demo = 0 AND source_row IS NULL
+                                   AND (title = ? OR location = ?)""",
+                                (item["previous_title"], item["previous_location"]),
+                            ).fetchall()
+                        if len(candidates) > 1:
+                            raise ValueError(f"Несколько карточек соответствуют строке {source_row}; обновление отменено.")
+                        matched = candidates[0] if candidates else None
+                    values = (item["title"], item["price"], item["area"], item["location"],
+                              item["rooms"], item["teaser"], item["description"],
+                              json.dumps(item["features"], ensure_ascii=False), item.get("sale_price"), source_row)
+                    if matched:
+                        item_id = matched["id"]
+                        self.conn.execute(
+                            """UPDATE properties SET title = ?, price = ?, area = ?, location = ?, rooms = ?,
+                               teaser = ?, description = ?, features_json = ?, sale_price = ?, source_row = ?,
+                               updated_at = CURRENT_TIMESTAMP WHERE id = ?""", values + (item_id,),
+                        )
+                        self.conn.execute("DELETE FROM property_photos WHERE property_id = ?", (item_id,))
+                    else:
+                        cursor = self.conn.execute(
+                            """INSERT INTO properties
+                               (title, price, area, location, rooms, teaser, description,
+                                features_json, sale_price, source_row, sort_order, is_active, is_demo)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)""", values + (order,),
+                        )
+                        item_id = cursor.lastrowid
                     self.conn.executemany(
                         "INSERT INTO property_photos(property_id, media, position) VALUES (?, ?, ?)",
-                        [(cursor.lastrowid, media, index) for index, media in enumerate(item["photos"])],
+                        [(item_id, media, index) for index, media in enumerate(item["photos"])],
                     )
                     order += 1
                 self.conn.execute("INSERT INTO catalog_imports(batch_id) VALUES (?)", (batch_id,))
@@ -209,6 +258,7 @@ class CatalogDB:
             "title": "title", "price": "price", "area": "area", "location": "location",
             "rooms": "rooms", "teaser": "teaser", "description": "description",
             "features": "features_json",
+            "sale_price": "sale_price",
         }
         if field not in columns:
             raise ValueError("Недопустимое поле объекта")
