@@ -146,8 +146,8 @@ def format_area(value: float) -> str:
 
 def home():
     return "🏠 Объекты", {"inline_keyboard": [
-        [button("Объекты. Аренда", "catalog:rent")],
-        [button("Объекты. Продажа", "catalog:sale")],
+        [button("Объекты. Аренда (не пересылать)", "catalog:rent")],
+        [button("Объекты. Продажа (не пересылать)", "catalog:sale")],
     ]}
 
 
@@ -160,7 +160,7 @@ def catalog(db: CatalogDB, mode: str = "rent"):
             amount = f"{price(item.price)}/мес."
         label = f"{item.location} · {format_area(item.area)} м² · {amount}"
         rows.append([button(label, f"show:{mode}:{item.id}")])
-    text = "🏠 Объекты. " + ("Продажа" if mode == "sale" else "Аренда")
+    text = "🏠 Объекты. " + ("Продажа" if mode == "sale" else "Аренда") + " (не пересылать)"
     if not rows:
         text = "🏠 Пока нет доступных объектов."
     rows.append([button("← Аренда / продажа", "home")])

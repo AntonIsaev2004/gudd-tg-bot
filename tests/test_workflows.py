@@ -351,7 +351,7 @@ class WorkflowTests(unittest.TestCase):
     def test_home_catalog_and_detail_preserve_price_mode(self):
         bot.handle_message(self.api, self.db, self.admin, message(100, "/start"))
         rows = self.api.calls[-1][1]["reply_markup"]["inline_keyboard"]
-        self.assertEqual([row[0]["text"] for row in rows], ["Объекты. Аренда", "Объекты. Продажа"])
+        self.assertEqual([row[0]["text"] for row in rows], ["Объекты. Аренда (не пересылать)", "Объекты. Продажа (не пересылать)"])
         for mode, amount in (("rent", "70 100 ₽/мес."), ("sale", "10 100 000 ₽")):
             bot.handle_callback(self.api, self.db, self.admin, callback(100, f"catalog:{mode}"))
             label = self.api.calls[-1][1]["reply_markup"]["inline_keyboard"][0][0]["text"]
