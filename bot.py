@@ -191,6 +191,7 @@ def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str
         f"<b>{html.escape(item.title)}</b>",
         f"<b>{amount}</b>",
         "",
+        f"📍 {html.escape(item.location)}",
         f"📐 {format_area(item.area)} м²" + (f"  ·  🏢 {html.escape(item.rooms)}" if item.rooms else ""),
         "",
         html.escape(item.description),
@@ -433,11 +434,14 @@ def main():
     try:
         batch_id, items = validated_catalog()
         imported, _ = db.import_catalog(batch_id, items)
+        corrected_titles = db.apply_title_corrections(batch_id, items)
     except (OSError, ValueError, sqlite3.Error) as exc:
         db.close()
         raise SystemExit(f"Не удалось обновить каталог: {exc}") from None
     if imported:
         print(f"Каталог обновлён: {len(items)} объектов. ID и история существующих карточек сохранены.", flush=True)
+    if corrected_titles:
+        print(f"Названия карточек без адресов обновлены: {corrected_titles}.", flush=True)
     try:
         report_settings = load_report_settings(env_file, load_setting)
     except ValueError as exc:

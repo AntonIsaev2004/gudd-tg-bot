@@ -36,7 +36,7 @@ def validated_catalog():
         if type(source_row) is not int or source_row < 2 or source_row in source_rows:
             raise ValueError("Некорректная или повторная исходная строка в catalog.json")
         source_rows.add(source_row)
-        for key in ("previous_title", "previous_location"):
+        for key in ("previous_title", "previous_location", "title_before_address_cleanup"):
             if key in item and (not isinstance(item[key], str) or not item[key] or len(item[key]) > 100):
                 raise ValueError(f"Некорректное поле {key} в catalog.json")
         if type(item.get("area")) not in (int, float) or item["area"] <= 0:
@@ -80,11 +80,14 @@ def main():
     db = CatalogDB(db_path)
     try:
         imported, removed = db.import_catalog(batch_id, items)
+        corrected_titles = db.apply_title_corrections(batch_id, items)
         if imported:
             print(f"Каталог обновлён: {len(items)} объектов. ID и история существующих карточек сохранены.")
         else:
             print("Эта партия уже загружена. Повторных карточек нет.")
         print(f"Удалено демонстрационных карточек: {removed} (включая связанные с ними просмотры).")
+        if corrected_titles:
+            print(f"Названия карточек без адресов обновлены: {corrected_titles}.")
     finally:
         db.close()
 

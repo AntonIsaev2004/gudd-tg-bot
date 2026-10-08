@@ -253,6 +253,26 @@ class CatalogDB:
                 self.conn.execute("DELETE FROM properties WHERE is_demo = 1")
         return not bool(imported), demo_count
 
+    def apply_title_corrections(self, batch_id, items):
+        """Один раз заменяет исходные адресные заголовки, сохраняя правки администраторов."""
+        corrections = [item for item in items if item.get("title_before_address_cleanup")]
+        if not corrections:
+            return 0
+        correction_id = f"{batch_id}:titles-without-address-v1"
+        with self.conn:
+            if self.conn.execute("SELECT 1 FROM catalog_imports WHERE batch_id = ?", (correction_id,)).fetchone():
+                return 0
+            count = 0
+            for item in corrections:
+                cursor = self.conn.execute(
+                    """UPDATE properties SET title = ?, updated_at = CURRENT_TIMESTAMP
+                       WHERE source_row = ? AND title = ?""",
+                    (item["title"], item["source_row"], item["title_before_address_cleanup"]),
+                )
+                count += cursor.rowcount
+            self.conn.execute("INSERT INTO catalog_imports(batch_id) VALUES (?)", (correction_id,))
+        return count
+
     def update_property(self, item_id, field, value):
         columns = {
             "title": "title", "price": "price", "area": "area", "location": "location",

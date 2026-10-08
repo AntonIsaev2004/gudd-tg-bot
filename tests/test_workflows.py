@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import sqlite3
 import json
+import html
 from unittest.mock import patch
 from io import BytesIO, StringIO
 from contextlib import redirect_stdout
@@ -448,16 +449,62 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM catalog_imports").fetchone()[0], 0)
 
     def test_new_manifest_is_valid_and_contains_both_prices_without_payback(self):
-        _, items = validated_catalog()
+        batch_id, items = validated_catalog()
         self.assertEqual(len(items), 11)
         self.assertTrue(all(item["sale_price"] > 0 and item["price"] > 0 for item in items))
         self.assertFalse(any("Окупаемость" in json.dumps(item, ensure_ascii=False) for item in items))
+        self.db.import_catalog(batch_id, items)
+        for card in self.db.list_properties():
+            self.assertNotEqual(card.title, card.location)
+            for mode in ("rent", "sale"):
+                caption = bot.detail_caption(card, mode=mode)
+                self.assertEqual(caption.splitlines()[0], f"<b>{html.escape(card.title)}</b>")
+                self.assertIn(f"📍 {html.escape(card.location)}", caption)
+                self.assertEqual(caption.count(html.escape(card.location)), 1)
         with tempfile.TemporaryDirectory() as temp:
             manifest = Path(temp) / "catalog.json"
             for invalid in (dict(items[0], sale_price=0), dict(items[0], source_row="2")):
                 manifest.write_text(json.dumps({"batch_id": "bad", "items": [invalid]}), encoding="utf-8")
                 with patch("import_catalog.MANIFEST", manifest), self.assertRaises(ValueError):
                     validated_catalog()
+
+    def test_existing_address_titles_are_corrected_once_without_overwriting_admin_edits(self):
+        batch_id, items = validated_catalog()
+        legacy_items = [dict(item, title=item["title_before_address_cleanup"]) for item in items]
+        self.db.import_catalog(batch_id, legacy_items)
+        cards = self.db.list_properties()[:11]
+        first, second = cards[:2]
+        self.db.update_property(first.id, "price", 123456)
+        self.db.update_property(first.id, "description", "Правка администратора")
+        self.db.add_photo(first.id, "uploaded_photo")
+        self.db.update_property(second.id, "title", "Своё название администратора")
+        self.db.set_active(first.id, False)
+        self.db.upsert_user(user(100))
+        self.db.record_event(100, "property_opened", first.id)
+        before = [dict(row) for row in self.db.conn.execute("SELECT * FROM properties ORDER BY id")]
+        photos_before = [tuple(row) for row in self.db.conn.execute("SELECT * FROM property_photos ORDER BY id")]
+
+        self.assertEqual(self.db.import_catalog(batch_id, items), (False, 0))
+        self.assertEqual(self.db.apply_title_corrections(batch_id, items), 10)
+        updated = self.db.get_property(first.id, active_only=False)
+        self.assertEqual(updated.title, items[0]["title"])
+        self.assertEqual(updated.price, 123456)
+        self.assertEqual(updated.description, "Правка администратора")
+        self.assertEqual(updated.photos[-1], "uploaded_photo")
+        self.assertEqual(self.db.get_property(second.id).title, "Своё название администратора")
+        self.assertFalse(self.db.is_active(first.id))
+        after = [dict(row) for row in self.db.conn.execute("SELECT * FROM properties ORDER BY id")]
+        for row in before + after:
+            row.pop("title")
+            row.pop("updated_at")
+        self.assertEqual(before, after)
+        self.assertEqual(photos_before, [tuple(row) for row in self.db.conn.execute("SELECT * FROM property_photos ORDER BY id")])
+        self.assertEqual(self.db.conn.execute("SELECT property_id FROM user_events").fetchone()[0], first.id)
+        self.db.update_property(first.id, "title", "Поздняя правка названия")
+        self.db.delete_property(cards[2].id)
+        self.assertEqual(self.db.apply_title_corrections(batch_id, items), 0)
+        self.assertEqual(self.db.get_property(first.id, active_only=False).title, "Поздняя правка названия")
+        self.assertIsNone(self.db.get_property(cards[2].id, active_only=False))
 
     def test_startup_applies_new_catalog_once_without_network_or_smtp(self):
         class StartupAPI:

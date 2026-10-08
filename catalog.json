@@ -3,7 +3,7 @@
   "items": [
     {
       "source_row": 2,
-      "title": "Казань, Волочаевская, 4, пом.1",
+      "title": "Современный офис, пом. 1",
       "price": 71000,
       "sale_price": 10100000,
       "area": 29.4,
@@ -19,11 +19,12 @@
         "media/object_02/04.jpg"
       ],
       "previous_title": "Современный офис, пом. 1",
-      "previous_location": "Казань, Волочаевская, д. 4, пом. 1"
+      "previous_location": "Казань, Волочаевская, д. 4, пом. 1",
+      "title_before_address_cleanup": "Казань, Волочаевская, 4, пом.1"
     },
     {
       "source_row": 3,
-      "title": "Казань, Волочаевская, 4, помещение № 2",
+      "title": "Современный офис, пом. 2",
       "price": 73700,
       "sale_price": 10500000,
       "area": 30.5,
@@ -39,11 +40,12 @@
         "media/object_03/04.jpg"
       ],
       "previous_title": "Современный офис, пом. 2",
-      "previous_location": "Казань, Волочаевская, д. 4, пом. 2"
+      "previous_location": "Казань, Волочаевская, д. 4, пом. 2",
+      "title_before_address_cleanup": "Казань, Волочаевская, 4, помещение № 2"
     },
     {
       "source_row": 4,
-      "title": "Казань, Волочаевская, 4, помещение № 3",
+      "title": "Современный офис, пом. 3",
       "price": 75000,
       "sale_price": 10600000,
       "area": 31.0,
@@ -59,11 +61,12 @@
         "media/object_04/04.jpg"
       ],
       "previous_title": "Современный офис, пом. 3",
-      "previous_location": "Казань, Волочаевская, д. 4, пом. 3"
+      "previous_location": "Казань, Волочаевская, д. 4, пом. 3",
+      "title_before_address_cleanup": "Казань, Волочаевская, 4, помещение № 3"
     },
     {
       "source_row": 5,
-      "title": "Казань, Волочаевская, 4, помещение № 6",
+      "title": "Современный офис, пом. 6",
       "price": 50000,
       "sale_price": 7400000,
       "area": 20.6,
@@ -80,11 +83,12 @@
         "media/object_05/05.jpg"
       ],
       "previous_title": "Современный офис, пом. 6",
-      "previous_location": "Казань, Волочаевская, д. 4, пом. 6"
+      "previous_location": "Казань, Волочаевская, д. 4, пом. 6",
+      "title_before_address_cleanup": "Казань, Волочаевская, 4, помещение № 6"
     },
     {
       "source_row": 6,
-      "title": "Москва, Ленинградский проспект, 75 к1Б",
+      "title": "Возле метро Сокол",
       "price": 520000,
       "sale_price": 71000000,
       "area": 106.0,
@@ -101,11 +105,12 @@
         "media/object_06/05.jpg"
       ],
       "previous_title": "Возле метро Сокол",
-      "previous_location": "Москва, Ленинградский проспект, 75 к1Б"
+      "previous_location": "Москва, Ленинградский проспект, 75 к1Б",
+      "title_before_address_cleanup": "Москва, Ленинградский проспект, 75 к1Б"
     },
     {
       "source_row": 7,
-      "title": "Москва, Проспект Мира,135А",
+      "title": "Апартаменты бизнес-класса рядом с ВДНХ",
       "price": 294000,
       "sale_price": 34500000,
       "area": 87.4,
@@ -124,11 +129,12 @@
         "media/object_07/07.jpg"
       ],
       "previous_title": "Апартаменты Бизнес-класса рядом с ВДНХ",
-      "previous_location": "Москва, пр. Мира, 135А"
+      "previous_location": "Москва, пр. Мира, 135А",
+      "title_before_address_cleanup": "Москва, Проспект Мира,135А"
     },
     {
       "source_row": 8,
-      "title": "Москва, 3-я Владимирская, 23",
+      "title": "Возле метро Перово",
       "price": 163000,
       "sale_price": 25900000,
       "area": 36.3,
@@ -146,11 +152,12 @@
         "media/object_08/06.jpg"
       ],
       "previous_title": "Возле метро Перово",
-      "previous_location": "Москва, 3-я Владимирская, 23"
+      "previous_location": "Москва, 3-я Владимирская, 23",
+      "title_before_address_cleanup": "Москва, 3-я Владимирская, 23"
     },
     {
       "source_row": 9,
-      "title": "Москва, ЖК Первый Нагатинский",
+      "title": "ЖК Первый Нагатинский",
       "price": 767000,
       "sale_price": 96700000,
       "area": 112.42,
@@ -169,11 +176,12 @@
         "media/object_09/07.jpg"
       ],
       "previous_title": "ЖК Первый Нагатинский премиум-класса",
-      "previous_location": "Москва, Нагатинская, к 2"
+      "previous_location": "Москва, Нагатинская, к 2",
+      "title_before_address_cleanup": "Москва, ЖК Первый Нагатинский"
     },
     {
       "source_row": 10,
-      "title": "МО, г.Люберцы, ул.8 Марта, 45",
+      "title": "Метро Лухмановская",
       "price": 787000,
       "sale_price": 89880000,
       "area": 214.0,
@@ -191,11 +199,12 @@
         "media/object_10/06.jpg"
       ],
       "previous_title": "Метро Лухмановская",
-      "previous_location": "г. Люберцы, ул. 8 Марта, 45"
+      "previous_location": "г. Люберцы, ул. 8 Марта, 45",
+      "title_before_address_cleanup": "МО, г.Люберцы, ул.8 Марта, 45"
     },
     {
       "source_row": 11,
-      "title": "Москва, ЖК Цветочные Поляны - Экопарк",
+      "title": "ЖК Цветочные Поляны Экопарк",
       "price": 340000,
       "sale_price": 42000000,
       "area": 119.7,
@@ -212,11 +221,12 @@
         "media/object_11/05.jpg"
       ],
       "previous_title": "ЖК Цветочные Поляны Экопарк",
-      "previous_location": "Москва, ЖК Цветочные Поляны, Экопарк, к2"
+      "previous_location": "Москва, ЖК Цветочные Поляны, Экопарк, к2",
+      "title_before_address_cleanup": "Москва, ЖК Цветочные Поляны - Экопарк"
     },
     {
       "source_row": 12,
-      "title": "Москва, ЖК Алхимово",
+      "title": "ЖК Алхимово",
       "price": 576000,
       "sale_price": 96000000,
       "area": 206.7,
@@ -235,7 +245,8 @@
         "media/object_12/07.jpg"
       ],
       "previous_title": "ЖК Алхимово Рязановское шоссе",
-      "previous_location": "Москва, ЖК Алхимово, ул. Уточкина, 2к1"
+      "previous_location": "Москва, ЖК Алхимово, ул. Уточкина, 2к1",
+      "title_before_address_cleanup": "Москва, ЖК Алхимово"
     }
   ]
 }

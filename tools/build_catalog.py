@@ -17,6 +17,13 @@ from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 BATCH_ID = "catalog-2026-10-08-v2"
+CARD_TITLES = {
+    2: "Современный офис, пом. 1", 3: "Современный офис, пом. 2",
+    4: "Современный офис, пом. 3", 5: "Современный офис, пом. 6",
+    6: "Возле метро Сокол", 7: "Апартаменты бизнес-класса рядом с ВДНХ",
+    8: "Возле метро Перово", 9: "ЖК Первый Нагатинский",
+    10: "Метро Лухмановская", 11: "ЖК Цветочные Поляны Экопарк", 12: "ЖК Алхимово",
+}
 FOLDERS = {
     2: "Волочаевская д.4/пом 1", 3: "Волочаевская д.4/пом 2",
     4: "Волочаевская д.4/пом 3", 5: "Волочаевская д.4/пом 6",
@@ -88,7 +95,8 @@ def build(xlsx_path, zip_path):
                     if f"media/object_{row:02d}/{stale.name}" not in photos:
                         stale.unlink()
                 item = {
-                    "source_row": row, "title": clean_text(title),
+                    "source_row": row, "title": CARD_TITLES[row],
+                    "title_before_address_cleanup": clean_text(title),
                     "price": int(monthly_rent), "sale_price": int(sale_price),
                     "area": float(area), "location": clean_text(address),
                     "rooms": "Офис" if row <= 5 else ("Апартаменты" if row == 7 else "Коммерческое помещение"),
