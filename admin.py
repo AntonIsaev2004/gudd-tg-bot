@@ -7,27 +7,28 @@ from dataclasses import dataclass, field, replace
 
 from models import Property
 from pricing import monthly_price, price, validate_price_text
+from catalog_labels import BUTTON_TEXT_HINT, validate_button_text
 
 
-ADDRESS_BUTTON_HINT = (
-    "Этот адрес будет на кнопке в каталоге рядом с площадью и ценой. "
-    "Длинный текст может обрезаться на телефоне; полного адреса это не меняет."
-)
+ADDRESS_HINT = "Полный адрес будет в карточке отдельной строкой с 📍. Текст кнопок задаётся отдельно."
 PRICE_INPUT_HINT = "Введите цену текстом до 50 символов, например «71 тыс.», «10,1 млн.» или «по запросу»."
 
 STEPS = (
-    ("title", "Название объекта (до 80 символов):"),
+    ("title", "Заголовок карточки (короткое название без адреса, до 80 символов):"),
     ("price", "Аренда в месяц с НДС (текст до 50 символов, например «71 тыс.»):"),
     ("sale_price", "Цена продажи (текст до 50 символов, например «10,1 млн.»):"),
     ("area", "Площадь в м² (например, 82 или 82,5):"),
-    ("location", f"Адрес объекта (до 100 символов):\n{ADDRESS_BUTTON_HINT}"),
+    ("location", f"Адрес объекта (до 100 символов):\n{ADDRESS_HINT}"),
+    ("rent_button_text", f"Текст кнопки в списке «Аренда»:\n{BUTTON_TEXT_HINT}"),
+    ("sale_button_text", f"Текст кнопки в списке «Продажа»:\n{BUTTON_TEXT_HINT}"),
     ("rooms", "Тип помещения (например, «офис»):"),
     ("teaser", "Краткое описание (до 200 символов). Если не нужно — /skip:"),
     ("description", "Полное описание для карточки (до 800 символов):"),
     ("features", "Особенности через запятую (до 5 пунктов). Если не нужны — /skip:"),
 )
 FIELD_LABELS = {
-    "title": "Название", "price": "Аренда в месяц", "sale_price": "Цена продажи", "area": "Площадь", "location": "Адрес",
+    "title": "Заголовок", "price": "Аренда в месяц", "sale_price": "Цена продажи", "area": "Площадь", "location": "Адрес",
+    "rent_button_text": "Текст кнопки — аренда", "sale_button_text": "Текст кнопки — продажа",
     "rooms": "Тип помещения", "teaser": "Краткое описание", "description": "Описание",
     "features": "Особенности",
 }
@@ -53,6 +54,8 @@ def parse_value(name, raw):
     value = raw.strip()
     if name in ("price", "sale_price"):
         return validate_price_text(value)
+    if name in ("rent_button_text", "sale_button_text"):
+        return validate_button_text(value)
     if name == "area":
         normalized = re.sub(r"[\s\u00a0]", "", value).replace(",", ".")
         if len(normalized) > 10 or not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?", normalized) or not 0 < float(normalized) < 10**6:
@@ -101,6 +104,8 @@ class AdminPanel:
         label = "Черновик — ещё не виден посетителям." if draft else "Предпросмотр карточки."
         self._send(chat_id, f"👁 {label}")
         self.preview_sender(self.api, chat_id, item, mode=mode)
+        label_text = item.sale_button_text if mode == "sale" else item.rent_button_text
+        self._send(chat_id, f"Текст кнопки в списке {'продажи' if mode == 'sale' else 'аренды'}:\n{html.escape(label_text)}")
         state = self.states.get(chat_id) if draft else None
         prefix = f"adm:previewdraft:{state.token}" if state else f"adm:preview:{item.id}"
         self._send(chat_id, "Предпросмотр цены:", [
@@ -127,6 +132,7 @@ class AdminPanel:
             values["rooms"], values["teaser"], values["description"],
             tuple(values["features"]), tuple(state.photos),
             sale_price=values["sale_price"],
+            rent_button_text=values["rent_button_text"], sale_button_text=values["sale_button_text"],
         )
 
     def list_menu(self, chat_id):
@@ -144,7 +150,8 @@ class AdminPanel:
             self.list_menu(chat_id)
             return
         rows = [
-            [button("Название", f"adm:field:{item_id}:title"), button("Адрес", f"adm:field:{item_id}:location")],
+            [button("Заголовок", f"adm:field:{item_id}:title"), button("Адрес", f"adm:field:{item_id}:location")],
+            [button("Текст кнопки в каталоге", f"adm:buttontexts:{item_id}")],
             [button("Аренда в месяц", f"adm:field:{item_id}:price"), button("Цена продажи", f"adm:field:{item_id}:sale_price")],
             [button("Площадь", f"adm:field:{item_id}:area")],
             [button("Тип помещения", f"adm:field:{item_id}:rooms"), button("Краткое описание", f"adm:field:{item_id}:teaser")],
@@ -164,13 +171,31 @@ class AdminPanel:
             f"<b>#{item.id} {html.escape(item.title)}</b>\n"
             f"{amount} · {format(item.area, 'g').replace('.', ',')} м²\n"
             f"{sale}\n"
-            f"{html.escape(item.location)} · {html.escape(item.rooms)}\n"
+            f"📍 {html.escape(item.location)} · {html.escape(item.rooms)}\n"
             f"Статус: {'показывается' if self.db.is_active(item_id) else 'скрыт'}\n\n"
+            f"Кнопка аренды: {html.escape(item.rent_button_text)}\n"
+            f"Кнопка продажи: {html.escape(item.sale_button_text)}\n\n"
             f"Кратко: {html.escape(item.teaser or '—')}\n"
             f"Описание: {description}\n"
             f"Особенности: {html.escape(', '.join(item.features) or '—')}",
             rows,
         )
+
+    def button_text_menu(self, chat_id, item_id):
+        item = self.db.get_property(item_id, active_only=False)
+        if item is None:
+            self.list_menu(chat_id)
+            return
+        self._send(chat_id,
+            f"<b>Текст кнопок каталога</b>\n\n"
+            f"Аренда: {html.escape(item.rent_button_text)}\n"
+            f"Продажа: {html.escape(item.sale_button_text)}\n\n"
+            "Выберите раздел, затем отправьте весь новый текст кнопки одним сообщением. "
+            "Это отдельное поле: заголовок, адрес и цены карточки не меняются.", [
+                [button("Аренда", f"adm:field:{item_id}:rent_button_text"),
+                 button("Продажа", f"adm:field:{item_id}:sale_button_text")],
+                [button("← К объекту", f"adm:edit:{item_id}")],
+            ])
 
     def photo_menu(self, chat_id, item_id):
         item = self.db.get_property(item_id, active_only=False)
@@ -330,6 +355,8 @@ class AdminPanel:
             self._send(chat_id, "Не удалось определить объект.")
         elif action == "edit":
             self.edit_menu(chat_id, item_id)
+        elif action == "buttontexts":
+            self.button_text_menu(chat_id, item_id)
         elif action == "preview" and (len(parts) == 3 or (len(parts) == 4 and parts[3] in ("rent", "sale"))):
             item = self.db.get_property(item_id, active_only=False)
             if item:
@@ -339,9 +366,11 @@ class AdminPanel:
         elif action == "field" and len(parts) == 4 and parts[3] in FIELD_LABELS:
             if self.db.get_property(item_id, active_only=False):
                 self.states[chat_id] = AdminState("edit_field", item_id=item_id, field_name=parts[3])
-                hint = f"\n{ADDRESS_BUTTON_HINT}" if parts[3] == "location" else ""
+                hint = f"\n{ADDRESS_HINT}" if parts[3] == "location" else ""
                 if parts[3] in ("price", "sale_price"):
                     hint = f"\n{PRICE_INPUT_HINT}"
+                if parts[3] in ("rent_button_text", "sale_button_text"):
+                    hint = f"\n{BUTTON_TEXT_HINT}"
                 self._send(chat_id, f"Новое значение поля «{FIELD_LABELS[parts[3]]}»:{hint}\n/cancel — отмена")
         elif action == "photos":
             self.photo_menu(chat_id, item_id)

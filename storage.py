@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from models import Property
+from catalog_labels import initial_button_text
 
 
 class CatalogDB:
@@ -142,6 +143,26 @@ class CatalogDB:
                 self.conn.execute("PRAGMA user_version = 6")
         if version < 7:
             self._migrate_text_prices()
+        if version < 8:
+            self._migrate_button_texts()
+
+    def _migrate_button_texts(self):
+        """Сохраняет прежние подписи как отдельные редактируемые тексты."""
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(properties)")}
+            for column in ("rent_button_text", "sale_button_text"):
+                if column not in columns:
+                    self.conn.execute(f"ALTER TABLE properties ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+            rows = self.conn.execute("SELECT id, location, area, price, sale_price, rent_button_text, sale_button_text FROM properties").fetchall()
+            for row in rows:
+                self.conn.execute(
+                    "UPDATE properties SET rent_button_text = ?, sale_button_text = ? WHERE id = ?",
+                    (row["rent_button_text"] or initial_button_text(row["location"], row["area"], row["price"]),
+                     row["sale_button_text"] or initial_button_text(row["location"], row["area"], row["sale_price"], mode="sale"),
+                     row["id"]),
+                )
+            self.conn.execute("PRAGMA user_version = 8")
 
     def _migrate_text_prices(self):
         """Меняет тип цен на TEXT одной транзакцией, сохраняя ID, связи и счётчик ID."""
@@ -207,6 +228,7 @@ class CatalogDB:
             row["rooms"], row["teaser"], row["description"],
             tuple(json.loads(row["features_json"])), tuple(photo["media"] for photo in photos),
             sale_price=row["sale_price"],
+            rent_button_text=row["rent_button_text"], sale_button_text=row["sale_button_text"],
         )
 
     def list_properties(self, active_only=True):
@@ -232,11 +254,14 @@ class CatalogDB:
             order = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM properties").fetchone()[0]
             cursor = self.conn.execute(
                 """INSERT INTO properties
-                   (title, price, area, location, rooms, teaser, description, features_json, sort_order, sale_price)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (title, price, area, location, rooms, teaser, description, features_json, sort_order, sale_price,
+                    rent_button_text, sale_button_text)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (values["title"], values["price"], values["area"], values["location"],
                  values["rooms"], values["teaser"], values["description"],
-                 json.dumps(values["features"], ensure_ascii=False), order, values.get("sale_price")),
+                 json.dumps(values["features"], ensure_ascii=False), order, values.get("sale_price"),
+                 values.get("rent_button_text") or initial_button_text(values.get("button_address", values["location"]), values["area"], values["price"]),
+                 values.get("sale_button_text") or initial_button_text(values.get("button_address", values["location"]), values["area"], values.get("sale_price"), mode="sale")),
             )
             item_id = cursor.lastrowid
             self.conn.executemany(
@@ -275,12 +300,15 @@ class CatalogDB:
                         matched = candidates[0] if candidates else None
                     values = (item["title"], item["price"], item["area"], item["location"],
                               item["rooms"], item["teaser"], item["description"],
-                              json.dumps(item["features"], ensure_ascii=False), item.get("sale_price"), source_row)
+                              json.dumps(item["features"], ensure_ascii=False), item.get("sale_price"), source_row,
+                              item.get("rent_button_text") or initial_button_text(item.get("button_address", item["location"]), item["area"], item["price"]),
+                              item.get("sale_button_text") or initial_button_text(item.get("button_address", item["location"]), item["area"], item.get("sale_price"), mode="sale"))
                     if matched:
                         item_id = matched["id"]
                         self.conn.execute(
                             """UPDATE properties SET title = ?, price = ?, area = ?, location = ?, rooms = ?,
                                teaser = ?, description = ?, features_json = ?, sale_price = ?, source_row = ?,
+                               rent_button_text = ?, sale_button_text = ?,
                                updated_at = CURRENT_TIMESTAMP WHERE id = ?""", values + (item_id,),
                         )
                         self.conn.execute("DELETE FROM property_photos WHERE property_id = ?", (item_id,))
@@ -288,8 +316,8 @@ class CatalogDB:
                         cursor = self.conn.execute(
                             """INSERT INTO properties
                                (title, price, area, location, rooms, teaser, description,
-                                features_json, sale_price, source_row, sort_order, is_active, is_demo)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)""", values + (order,),
+                                features_json, sale_price, source_row, rent_button_text, sale_button_text, sort_order, is_active, is_demo)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)""", values + (order,),
                         )
                         item_id = cursor.lastrowid
                     self.conn.executemany(
@@ -315,7 +343,7 @@ class CatalogDB:
         corrections = [item for item in items if item.get("title_before_address_cleanup")]
         if not corrections:
             return 0
-        correction_id = f"{batch_id}:titles-without-address-v1"
+        correction_id = f"{batch_id}:titles-without-address-v2"
         with self.conn:
             if self.conn.execute("SELECT 1 FROM catalog_imports WHERE batch_id = ?", (correction_id,)).fetchone():
                 return 0
@@ -323,10 +351,36 @@ class CatalogDB:
             for item in corrections:
                 cursor = self.conn.execute(
                     """UPDATE properties SET title = ?, updated_at = CURRENT_TIMESTAMP
-                       WHERE source_row = ? AND title = ?""",
-                    (item["title"], item["source_row"], item["title_before_address_cleanup"]),
+                       WHERE source_row = ? AND title != ? AND title IN (?, ?, ?)""",
+                    (item["title"], item["source_row"], item["title"], item["title_before_address_cleanup"],
+                     item["location"], item.get("button_address", item["location"])),
                 )
                 count += cursor.rowcount
+            self.conn.execute("INSERT INTO catalog_imports(batch_id) VALUES (?)", (correction_id,))
+        return count
+
+    def apply_button_text_defaults(self, batch_id, items):
+        """Один раз сокращает исходные подписи, не меняя цены или собственный текст админа."""
+        correction_id = f"{batch_id}:independent-button-texts-v1"
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            if self.conn.execute("SELECT 1 FROM catalog_imports WHERE batch_id = ?", (correction_id,)).fetchone():
+                return 0
+            count = 0
+            for item in items:
+                address = item.get("button_address")
+                if not address:
+                    continue
+                row = self.conn.execute("SELECT * FROM properties WHERE source_row = ?", (item["source_row"],)).fetchone()
+                if row is None:
+                    continue
+                for column, mode, amount in (("rent_button_text", "rent", row["price"]),
+                                              ("sale_button_text", "sale", row["sale_price"])):
+                    previous = initial_button_text(row["location"], row["area"], amount, mode=mode)
+                    label = initial_button_text(address, row["area"], amount, mode=mode)
+                    if row[column] in ("", previous) and row[column] != label:
+                        self.conn.execute(f"UPDATE properties SET {column} = ? WHERE id = ?", (label, row["id"]))
+                        count += 1
             self.conn.execute("INSERT INTO catalog_imports(batch_id) VALUES (?)", (correction_id,))
         return count
 
@@ -336,6 +390,7 @@ class CatalogDB:
             "rooms": "rooms", "teaser": "teaser", "description": "description",
             "features": "features_json",
             "sale_price": "sale_price",
+            "rent_button_text": "rent_button_text", "sale_button_text": "sale_button_text",
         }
         if field not in columns:
             raise ValueError("Недопустимое поле объекта")

@@ -151,11 +151,7 @@ def home():
 def catalog(db: CatalogDB, mode: str = "rent"):
     rows = []
     for item in db.list_properties():
-        if mode == "sale":
-            amount = price(item.sale_price) if item.sale_price else "Цена по запросу"
-        else:
-            amount = monthly_price(item.price)
-        label = f"{item.location} · {format_area(item.area)} м² · {amount}"
+        label = item.sale_button_text if mode == "sale" else item.rent_button_text
         rows.append([button(label, f"show:{mode}:{item.id}")])
     text = "🏠 Объекты. " + ("Продажа" if mode == "sale" else "Аренда") + " (не пересылать)"
     if not rows:
@@ -432,6 +428,7 @@ def main():
         batch_id, items = validated_catalog()
         imported, _ = db.import_catalog(batch_id, items)
         corrected_titles = db.apply_title_corrections(batch_id, items)
+        corrected_buttons = db.apply_button_text_defaults(batch_id, items)
     except (OSError, ValueError, sqlite3.Error) as exc:
         db.close()
         raise SystemExit(f"Не удалось обновить каталог: {exc}") from None
@@ -439,6 +436,8 @@ def main():
         print(f"Каталог обновлён: {len(items)} объектов. ID и история существующих карточек сохранены.", flush=True)
     if corrected_titles:
         print(f"Названия карточек без адресов обновлены: {corrected_titles}.", flush=True)
+    if corrected_buttons:
+        print(f"Тексты кнопок каталога обновлены: {corrected_buttons}.", flush=True)
     try:
         report_settings = load_report_settings(env_file, load_setting)
     except ValueError as exc:

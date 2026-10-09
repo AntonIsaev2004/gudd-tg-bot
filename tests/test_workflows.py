@@ -136,7 +136,7 @@ class WorkflowTests(unittest.TestCase):
             row = old_db.conn.execute("SELECT username, phone_number, phone_shared_at FROM users").fetchone()
             self.assertEqual(row["username"], "old_user")
             self.assertIsNone(row["phone_number"])
-            self.assertEqual(old_db.conn.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(old_db.conn.execute("PRAGMA user_version").fetchone()[0], 8)
             self.assertIn("phone_number", [row["name"] for row in old_db.conn.execute("PRAGMA table_info(user_events)")])
         finally:
             old_db.close()
@@ -153,7 +153,7 @@ class WorkflowTests(unittest.TestCase):
         item = self.db.get_property(1)
         self.assertEqual(item.features, ())
         self.assertNotIn("Часть изображений", bot.detail_caption(item))
-        self.assertEqual(self.db.conn.execute("PRAGMA user_version").fetchone()[0], 7)
+        self.assertEqual(self.db.conn.execute("PRAGMA user_version").fetchone()[0], 8)
 
     def test_admin_access_edit_hide_and_order(self):
         bot.handle_message(self.api, self.db, self.admin, message(43, "/admin"))
@@ -169,7 +169,8 @@ class WorkflowTests(unittest.TestCase):
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:area"))
         bot.handle_message(self.api, self.db, self.admin, message(42, "82,5"))
         self.assertEqual(self.db.get_property(1).area, 82.5)
-        self.assertIn("82,5 м²", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
+        self.assertIn("82,5 м²", bot.detail_caption(self.db.get_property(1)))
+        self.assertIn("36,3 м²", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:toggle:1"))
         self.assertIsNone(self.db.get_property(1))
         self.assertEqual(len(bot.catalog(self.db)[1]["inline_keyboard"]), 2)
@@ -180,7 +181,8 @@ class WorkflowTests(unittest.TestCase):
     def test_admin_creates_and_deletes_card_with_photos(self):
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:add"))
         answers = (
-            "Тестовый офис", "95 тыс.", "11 млн.", "75", "Казань", "Офис",
+            "Тестовый офис", "95 тыс.", "11 млн.", "75", "Казань",
+            "Казань · 75 м² · 95 тыс. ₽/мес.", "Казань · 75 м² · 11 млн. ₽", "Офис",
             "Короткий текст", "Подробное описание", "Парковка, Балкон",
         )
         self.assertEqual(len(answers), len(STEPS))
@@ -219,7 +221,8 @@ class WorkflowTests(unittest.TestCase):
     def test_draft_preview_shows_card_without_publishing_it(self):
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:add"))
         for answer in (
-            "Тестовый офис", "95000", "11000000", "75", "Казань", "Офис",
+            "Тестовый офис", "95000", "11000000", "75", "Казань",
+            "Кнопка аренды черновика", "Кнопка продажи черновика", "Офис",
             "Короткий текст", "Подробное описание", "Парковка",
         ):
             bot.handle_message(self.api, self.db, self.admin, message(42, answer))
@@ -291,7 +294,7 @@ class WorkflowTests(unittest.TestCase):
             "SELECT last_property_id FROM users WHERE telegram_id = 100").fetchone()[0])
         self.assertEqual(self.db.conn.execute(
             "SELECT last_property_id FROM users WHERE telegram_id = 101").fetchone()[0], 2)
-        self.assertIn("71 000 ₽/мес.", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
+        self.assertIn("71 тыс. ₽/мес.", bot.catalog(self.db)[1]["inline_keyboard"][0][0]["text"])
         self.assertIn("Аренда: 71 000 ₽/мес. с НДС", bot.detail_caption(self.db.list_properties()[0]))
         self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 1)
         report_properties, _ = self.db.report_data("0001-01-01 00:00:00", "9999-12-31 23:59:59")
@@ -355,10 +358,10 @@ class WorkflowTests(unittest.TestCase):
         bot.handle_message(self.api, self.db, self.admin, message(100, "/start"))
         rows = self.api.calls[-1][1]["reply_markup"]["inline_keyboard"]
         self.assertEqual([row[0]["text"] for row in rows], ["Объекты. Аренда (не пересылать)", "Объекты. Продажа (не пересылать)"])
-        for mode, amount in (("rent", "70 100 ₽/мес."), ("sale", "10 100 000 ₽")):
+        for mode, amount, button_amount in (("rent", "70 100 ₽/мес.", "70,1 тыс. ₽/мес."), ("sale", "10 100 000 ₽", "10,1 млн. ₽")):
             bot.handle_callback(self.api, self.db, self.admin, callback(100, f"catalog:{mode}"))
             label = self.api.calls[-1][1]["reply_markup"]["inline_keyboard"][0][0]["text"]
-            self.assertEqual(label, f"Москва · 36,3 м² · {amount}")
+            self.assertEqual(label, f"Москва · 36,3 м² · {button_amount}")
             bot.handle_callback(self.api, self.db, self.admin, callback(100, f"show:{mode}:1"))
             album = next(params for method, params in reversed(self.api.calls) if method == "sendMediaGroup")
             self.assertIn(amount, album["media"][0]["caption"])
@@ -380,7 +383,7 @@ class WorkflowTests(unittest.TestCase):
             current_controls = bot.ACTIVE_DETAILS[100].controls_id
             bot.handle_callback(self.api, self.db, self.admin, callback(100, f"back:{mode}:2", current_controls))
             catalog_message = next(params for method, params in reversed(self.api.calls) if method == "sendMessage")
-            self.assertIn(amount, catalog_message["reply_markup"]["inline_keyboard"][0][0]["text"])
+            self.assertIn(button_amount, catalog_message["reply_markup"]["inline_keyboard"][0][0]["text"])
             self.assertNotIn(100, bot.ACTIVE_DETAILS)
         bot.handle_callback(self.api, self.db, self.admin, callback(100, "home"))
         self.assertEqual(self.api.calls[-1][1]["reply_markup"], bot.home()[1])
@@ -411,7 +414,7 @@ class WorkflowTests(unittest.TestCase):
         sale_label = bot.catalog(self.db, "sale")[1]["inline_keyboard"][0][0]["text"]
         self.assertEqual(rent_label.count("₽"), 1)
         self.assertEqual(rent_label.count("/мес."), 1)
-        self.assertIn("от 12 млн. ₽", sale_label)
+        self.assertIn("10,1 млн. ₽", sale_label)
         self.assertEqual(sale_label.count("₽"), 1)
         self.assertIn("Аренда: 71 тыс. ₽/мес. с НДС", bot.detail_caption(self.db.get_property(1)))
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:sale_price"))

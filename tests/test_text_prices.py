@@ -15,8 +15,13 @@ from storage import CatalogDB
 
 class TextPriceTests(unittest.TestCase):
     def numeric_database(self, path):
-        with patch.object(CatalogDB, "_migrate_text_prices", return_value=None):
+        with patch.object(CatalogDB, "_migrate_text_prices", return_value=None), \
+                patch.object(CatalogDB, "_migrate_button_texts", return_value=None):
             db = CatalogDB(path)
+        # Современные методы наполнения используют подписи; типы цен остаются из v6.
+        with db.conn:
+            db.conn.execute("ALTER TABLE properties ADD COLUMN rent_button_text TEXT NOT NULL DEFAULT ''")
+            db.conn.execute("ALTER TABLE properties ADD COLUMN sale_button_text TEXT NOT NULL DEFAULT ''")
         batch_id, items = validated_catalog()
         db.import_catalog(batch_id, items)
         db.upsert_user({"id": 100, "first_name": "Посетитель"})
@@ -39,6 +44,8 @@ class TextPriceTests(unittest.TestCase):
             before = {table: [dict(row) for row in old.conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
                       for table in tables}
             for row in before["properties"]:
+                row.pop("rent_button_text")
+                row.pop("sale_button_text")
                 self.assertIsInstance(row["price"], int)
                 row["price"] = str(row["price"])
                 if row["sale_price"] is not None:
@@ -49,6 +56,9 @@ class TextPriceTests(unittest.TestCase):
             try:
                 after = {table: [dict(row) for row in db.conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
                          for table in tables}
+                for row in after["properties"]:
+                    row.pop("rent_button_text")
+                    row.pop("sale_button_text")
                 self.assertEqual(before, after)
                 columns = {row["name"]: row["type"] for row in db.conn.execute("PRAGMA table_info(properties)")}
                 self.assertEqual((columns["price"], columns["sale_price"]), ("TEXT", "TEXT"))

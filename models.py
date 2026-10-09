@@ -17,3 +17,5 @@ class Property:
     features: tuple
     photos: tuple
     sale_price: Optional[str] = None
+    rent_button_text: str = ""
+    sale_button_text: str = ""

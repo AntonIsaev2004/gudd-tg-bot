@@ -7,6 +7,7 @@ from pathlib import Path
 
 from storage import CatalogDB
 from pricing import validate_price_text
+from catalog_labels import initial_button_text, validate_button_text
 
 
 ROOT = Path(__file__).parent
@@ -44,6 +45,12 @@ def validated_catalog():
                 raise ValueError(f"Некорректное поле {key} в catalog.json")
         if type(item.get("area")) not in (int, float) or item["area"] <= 0:
             raise ValueError("Некорректная площадь в catalog.json")
+        address = item.get("button_address", item["location"])
+        if not isinstance(address, str) or not address.strip() or len(address) > 100:
+            raise ValueError("Некорректный короткий адрес в catalog.json")
+        for field, mode, amount in (("rent_button_text", "rent", item["price"]),
+                                     ("sale_button_text", "sale", item["sale_price"])):
+            item[field] = validate_button_text(item.get(field, initial_button_text(address, item["area"], amount, mode=mode)))
         features = item.get("features")
         if (not isinstance(features, list) or len(features) > 5 or
                 any(not isinstance(value, str) or len(value) > 40 for value in features)):
@@ -84,6 +91,7 @@ def main():
     try:
         imported, removed = db.import_catalog(batch_id, items)
         corrected_titles = db.apply_title_corrections(batch_id, items)
+        corrected_buttons = db.apply_button_text_defaults(batch_id, items)
         if imported:
             print(f"Каталог обновлён: {len(items)} объектов. ID и история существующих карточек сохранены.")
         else:
@@ -91,6 +99,8 @@ def main():
         print(f"Удалено демонстрационных карточек: {removed} (включая связанные с ними просмотры).")
         if corrected_titles:
             print(f"Названия карточек без адресов обновлены: {corrected_titles}.")
+        if corrected_buttons:
+            print(f"Тексты кнопок каталога обновлены: {corrected_buttons}.")
     finally:
         db.close()
 
