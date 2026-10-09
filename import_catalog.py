@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 from storage import CatalogDB
+from pricing import validate_price_text
 
 
 ROOT = Path(__file__).parent
@@ -28,10 +29,12 @@ def validated_catalog():
             value = item.get(key)
             if not isinstance(value, str) or len(value) > limit or (not value and key not in ("teaser", "rooms")):
                 raise ValueError(f"Некорректное поле {key} в catalog.json")
-        if type(item.get("price")) is not int or item["price"] <= 0:
-            raise ValueError("Некорректная аренда в catalog.json")
-        if type(item.get("sale_price")) is not int or not 0 < item["sale_price"] < 10**15:
-            raise ValueError("Некорректная цена продажи в catalog.json")
+        for key in ("price", "sale_price"):
+            value = item.get(key)
+            # Ранее подготовленные каталоги с числовыми ценами тоже поддерживаются.
+            if type(value) is int and 0 < value < 10**15:
+                value = str(value)
+            item[key] = validate_price_text(value)
         source_row = item.get("source_row")
         if type(source_row) is not int or source_row < 2 or source_row in source_rows:
             raise ValueError("Некорректная или повторная исходная строка в catalog.json")

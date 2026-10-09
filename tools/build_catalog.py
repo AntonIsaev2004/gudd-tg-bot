@@ -97,7 +97,7 @@ def build(xlsx_path, zip_path):
                 item = {
                     "source_row": row, "title": CARD_TITLES[row],
                     "title_before_address_cleanup": clean_text(title),
-                    "price": int(monthly_rent), "sale_price": int(sale_price),
+                    "price": clean_text(monthly_rent), "sale_price": clean_text(sale_price),
                     "area": float(area), "location": clean_text(address),
                     "rooms": "Офис" if row <= 5 else ("Апартаменты" if row == 7 else "Коммерческое помещение"),
                     "teaser": "", "description": clean_text(description),

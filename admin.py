@@ -6,17 +6,19 @@ import secrets
 from dataclasses import dataclass, field, replace
 
 from models import Property
+from pricing import monthly_price, price, validate_price_text
 
 
 ADDRESS_BUTTON_HINT = (
     "Этот адрес будет на кнопке в каталоге рядом с площадью и ценой. "
     "Длинный текст может обрезаться на телефоне; полного адреса это не меняет."
 )
+PRICE_INPUT_HINT = "Введите цену текстом до 50 символов, например «71 тыс.», «10,1 млн.» или «по запросу»."
 
 STEPS = (
     ("title", "Название объекта (до 80 символов):"),
-    ("price", "Аренда в месяц с НДС, в рублях (например, 70100):"),
-    ("sale_price", "Цена продажи, в рублях (например, 10100000):"),
+    ("price", "Аренда в месяц с НДС (текст до 50 символов, например «71 тыс.»):"),
+    ("sale_price", "Цена продажи (текст до 50 символов, например «10,1 млн.»):"),
     ("area", "Площадь в м² (например, 82 или 82,5):"),
     ("location", f"Адрес объекта (до 100 символов):\n{ADDRESS_BUTTON_HINT}"),
     ("rooms", "Тип помещения (например, «офис»):"),
@@ -50,10 +52,7 @@ def button(label, data):
 def parse_value(name, raw):
     value = raw.strip()
     if name in ("price", "sale_price"):
-        normalized = re.sub(r"[\s\u00a0]", "", value)
-        if len(normalized) > 15 or not normalized.isdecimal() or not 0 < int(normalized) < 10**15:
-            raise ValueError("Введите цену целым числом от 1 до 999 999 999 999 999 рублей.")
-        return int(normalized)
+        return validate_price_text(value)
     if name == "area":
         normalized = re.sub(r"[\s\u00a0]", "", value).replace(",", ".")
         if len(normalized) > 10 or not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?", normalized) or not 0 < float(normalized) < 10**6:
@@ -158,8 +157,8 @@ class AdminPanel:
             [button("← Список", "adm:list")],
         ]
         description = html.escape(item.description)
-        amount = f"Аренда: {item.price:,} ₽/мес. с НДС"
-        sale = f"Продажа: {item.sale_price:,} ₽" if item.sale_price else "Продажа: цена по запросу"
+        amount = html.escape(f"Аренда: {monthly_price(item.price, with_vat=True)}")
+        sale = html.escape(f"Продажа: {price(item.sale_price)}") if item.sale_price else "Продажа: цена по запросу"
         self._send(
             chat_id,
             f"<b>#{item.id} {html.escape(item.title)}</b>\n"
@@ -341,6 +340,8 @@ class AdminPanel:
             if self.db.get_property(item_id, active_only=False):
                 self.states[chat_id] = AdminState("edit_field", item_id=item_id, field_name=parts[3])
                 hint = f"\n{ADDRESS_BUTTON_HINT}" if parts[3] == "location" else ""
+                if parts[3] in ("price", "sale_price"):
+                    hint = f"\n{PRICE_INPUT_HINT}"
                 self._send(chat_id, f"Новое значение поля «{FIELD_LABELS[parts[3]]}»:{hint}\n/cancel — отмена")
         elif action == "photos":
             self.photo_menu(chat_id, item_id)

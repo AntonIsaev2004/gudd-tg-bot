@@ -136,7 +136,7 @@ class WorkflowTests(unittest.TestCase):
             row = old_db.conn.execute("SELECT username, phone_number, phone_shared_at FROM users").fetchone()
             self.assertEqual(row["username"], "old_user")
             self.assertIsNone(row["phone_number"])
-            self.assertEqual(old_db.conn.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(old_db.conn.execute("PRAGMA user_version").fetchone()[0], 7)
             self.assertIn("phone_number", [row["name"] for row in old_db.conn.execute("PRAGMA table_info(user_events)")])
         finally:
             old_db.close()
@@ -153,7 +153,7 @@ class WorkflowTests(unittest.TestCase):
         item = self.db.get_property(1)
         self.assertEqual(item.features, ())
         self.assertNotIn("Часть изображений", bot.detail_caption(item))
-        self.assertEqual(self.db.conn.execute("PRAGMA user_version").fetchone()[0], 6)
+        self.assertEqual(self.db.conn.execute("PRAGMA user_version").fetchone()[0], 7)
 
     def test_admin_access_edit_hide_and_order(self):
         bot.handle_message(self.api, self.db, self.admin, message(43, "/admin"))
@@ -180,7 +180,7 @@ class WorkflowTests(unittest.TestCase):
     def test_admin_creates_and_deletes_card_with_photos(self):
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:add"))
         answers = (
-            "Тестовый офис", "95000", "11000000", "75", "Казань", "Офис",
+            "Тестовый офис", "95 тыс.", "11 млн.", "75", "Казань", "Офис",
             "Короткий текст", "Подробное описание", "Парковка, Балкон",
         )
         self.assertEqual(len(answers), len(STEPS))
@@ -196,7 +196,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.db.list_properties(active_only=False)), 3)
         created = self.db.get_property(item_id)
         self.assertEqual(created.title, "Тестовый офис")
-        self.assertEqual(created.sale_price, 11_000_000)
+        self.assertEqual(created.price, "95 тыс.")
+        self.assertEqual(created.sale_price, "11 млн.")
         self.assertEqual(created.photos, ("file_1", "file_2"))
         bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:addphoto:{item_id}"))
         bot.handle_message(self.api, self.db, self.admin, message(42, photo="file_3"))
@@ -243,6 +244,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.admin.states[42].mode, "confirm_create")
         self.assertEqual(len(self.db.list_properties()), 2)
         self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 0)
+
         bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:save:{token}"))
         self.assertEqual(len(self.db.list_properties()), 3)
 
@@ -311,7 +313,7 @@ class WorkflowTests(unittest.TestCase):
         self.db.upsert_user(user(100))
         self.db.record_event(100, "property_opened", 1)
         manifest = json.loads((Path(__file__).parents[1] / "catalog.json").read_text(encoding="utf-8"))
-        invalid = [dict(manifest["items"][0], price=-1)]
+        invalid = [dict(manifest["items"][0], price="")]
         with self.assertRaises(sqlite3.IntegrityError):
             self.db.import_catalog("invalid", invalid)
         self.assertIsNotNone(self.db.get_property(1, active_only=False))
@@ -390,16 +392,37 @@ class WorkflowTests(unittest.TestCase):
         bot.handle_callback(self.api, self.db, self.admin, callback(43, "adm:field:1:sale_price"))
         self.assertNotIn(43, self.admin.states)
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:sale_price"))
-        bot.handle_message(self.api, self.db, self.admin, message(42, "-1"))
-        self.assertEqual(self.db.get_property(1).sale_price, 10_100_000)
+        bot.handle_message(self.api, self.db, self.admin, message(42, ""))
+        self.assertEqual(self.db.get_property(1).sale_price, "10100000")
         bot.handle_message(self.api, self.db, self.admin, message(42, "12 000 000"))
-        self.assertEqual(self.db.get_property(1).sale_price, 12_000_000)
-        self.assertEqual(self.db.get_property(1).price, 70_100)
+        self.assertEqual(self.db.get_property(1).sale_price, "12 000 000")
+        self.assertEqual(self.db.get_property(1).price, "70100")
         bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:preview:1:sale"))
         album = next(params for method, params in reversed(self.api.calls) if method == "sendMediaGroup")
         self.assertIn("Продажа: 12 000 000 ₽", album["media"][0]["caption"])
         self.assertNotIn("Аренда:", album["media"][0]["caption"])
         self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events").fetchone()[0], 0)
+
+        for field, value in (("price", "71 тыс. ₽/мес."), ("sale_price", "от 12 млн. ₽")):
+            bot.handle_callback(self.api, self.db, self.admin, callback(42, f"adm:field:1:{field}"))
+            self.assertIn("цену текстом", self.api.calls[-1][1]["text"])
+            bot.handle_message(self.api, self.db, self.admin, message(42, value))
+        rent_label = bot.catalog(self.db, "rent")[1]["inline_keyboard"][0][0]["text"]
+        sale_label = bot.catalog(self.db, "sale")[1]["inline_keyboard"][0][0]["text"]
+        self.assertEqual(rent_label.count("₽"), 1)
+        self.assertEqual(rent_label.count("/мес."), 1)
+        self.assertIn("от 12 млн. ₽", sale_label)
+        self.assertEqual(sale_label.count("₽"), 1)
+        self.assertIn("Аренда: 71 тыс. ₽/мес. с НДС", bot.detail_caption(self.db.get_property(1)))
+        bot.handle_callback(self.api, self.db, self.admin, callback(42, "adm:field:1:sale_price"))
+        bot.handle_message(self.api, self.db, self.admin, message(42, "по запросу"))
+        caption = bot.detail_caption(self.db.get_property(1), mode="sale")
+        self.assertIn("Продажа: по запросу", caption)
+        self.assertNotIn("по запросу ₽", caption)
+        self.db.close()
+        self.db = CatalogDB(self.path)
+        self.assertEqual(self.db.get_property(1).price, "71 тыс. ₽/мес.")
+        self.assertEqual(self.db.get_property(1).sale_price, "по запросу")
 
     def test_catalog_upgrade_updates_existing_card_without_losing_history_or_admin_settings(self):
         batch_id, items = validated_catalog()
@@ -414,7 +437,7 @@ class WorkflowTests(unittest.TestCase):
         self.db.conn.commit()
         self.assertEqual(self.db.import_catalog(batch_id, items), (True, 0))
         card = self.db.get_property(item_id, active_only=False)
-        self.assertEqual((card.price, card.sale_price, card.area), (71000, 10100000, 29.4))
+        self.assertEqual((card.price, card.sale_price, card.area), ("71000", "10100000", 29.4))
         self.assertEqual(card.location, items[0]["location"])
         self.assertEqual(card.features, ())
         self.assertEqual(card.photos, tuple(items[0]["photos"]))
@@ -451,7 +474,8 @@ class WorkflowTests(unittest.TestCase):
     def test_new_manifest_is_valid_and_contains_both_prices_without_payback(self):
         batch_id, items = validated_catalog()
         self.assertEqual(len(items), 11)
-        self.assertTrue(all(item["sale_price"] > 0 and item["price"] > 0 for item in items))
+        self.assertTrue(all(isinstance(item["sale_price"], str) and isinstance(item["price"], str)
+                            and item["sale_price"] and item["price"] for item in items))
         self.assertFalse(any("Окупаемость" in json.dumps(item, ensure_ascii=False) for item in items))
         self.db.import_catalog(batch_id, items)
         for card in self.db.list_properties():
@@ -488,7 +512,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.db.apply_title_corrections(batch_id, items), 10)
         updated = self.db.get_property(first.id, active_only=False)
         self.assertEqual(updated.title, items[0]["title"])
-        self.assertEqual(updated.price, 123456)
+        self.assertEqual(updated.price, "123456")
         self.assertEqual(updated.description, "Правка администратора")
         self.assertEqual(updated.photos[-1], "uploaded_photo")
         self.assertEqual(self.db.get_property(second.id).title, "Своё название администратора")
@@ -530,7 +554,7 @@ class WorkflowTests(unittest.TestCase):
         try:
             self.assertEqual(len(db.list_properties()), 11)
             item = db.list_properties()[0]
-            self.assertEqual(item.sale_price, 10_100_000)
+            self.assertEqual(item.sale_price, "10100000")
             db.update_property(item.id, "description", "Правка администратора")
         finally:
             db.close()

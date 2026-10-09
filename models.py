@@ -8,7 +8,7 @@ from typing import Optional
 class Property:
     id: int
     title: str
-    price: int
+    price: str
     area: float
     location: str
     rooms: str
@@ -16,4 +16,4 @@ class Property:
     description: str
     features: tuple
     photos: tuple
-    sale_price: Optional[int] = None
+    sale_price: Optional[str] = None

@@ -140,6 +140,63 @@ class CatalogDB:
                         self.conn.execute("UPDATE properties SET features_json = ? WHERE id = ?",
                                           (json.dumps(cleaned, ensure_ascii=False), row["id"]))
                 self.conn.execute("PRAGMA user_version = 6")
+        if version < 7:
+            self._migrate_text_prices()
+
+    def _migrate_text_prices(self):
+        """Меняет тип цен на TEXT одной транзакцией, сохраняя ID, связи и счётчик ID."""
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with self.conn:
+                # BEGIN нужен до CREATE TABLE: все изменения схемы тоже должны откатываться.
+                self.conn.execute("BEGIN IMMEDIATE")
+                sequence = self.conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'properties'").fetchone()
+                old_sequence = sequence[0] if sequence else 0
+                schema_objects = self.conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE tbl_name = 'properties' AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+                ).fetchall()
+                self.conn.execute("""
+                    CREATE TABLE properties_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL,
+                        price TEXT NOT NULL CHECK (length(trim(price)) BETWEEN 1 AND 50),
+                        area REAL NOT NULL CHECK (area > 0),
+                        location TEXT NOT NULL,
+                        rooms TEXT NOT NULL,
+                        teaser TEXT NOT NULL DEFAULT '',
+                        description TEXT NOT NULL,
+                        features_json TEXT NOT NULL DEFAULT '[]',
+                        sort_order INTEGER NOT NULL DEFAULT 0,
+                        is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                        is_demo INTEGER NOT NULL DEFAULT 0 CHECK (is_demo IN (0, 1)),
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        sale_price TEXT CHECK (sale_price IS NULL OR length(trim(sale_price)) BETWEEN 1 AND 50),
+                        source_row INTEGER
+                    )
+                """)
+                self.conn.execute("""
+                    INSERT INTO properties_new
+                        (id, title, price, area, location, rooms, teaser, description, features_json,
+                         sort_order, is_active, is_demo, created_at, updated_at, sale_price, source_row)
+                    SELECT id, title, CAST(price AS TEXT), area, location, rooms, teaser, description, features_json,
+                           sort_order, is_active, is_demo, created_at, updated_at, CAST(sale_price AS TEXT), source_row
+                    FROM properties
+                """)
+                self.conn.execute("DROP TABLE properties")
+                self.conn.execute("ALTER TABLE properties_new RENAME TO properties")
+                for schema_object in schema_objects:
+                    self.conn.execute(schema_object["sql"])
+                cursor = self.conn.execute(
+                    "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'properties'", (old_sequence,)
+                )
+                if not cursor.rowcount:
+                    self.conn.execute("INSERT INTO sqlite_sequence(name, seq) VALUES ('properties', ?)", (old_sequence,))
+                if self.conn.execute("PRAGMA foreign_key_check").fetchone():
+                    raise sqlite3.IntegrityError("Не удалось сохранить связи при обновлении полей цены")
+                self.conn.execute("PRAGMA user_version = 7")
+        finally:
+            self.conn.execute("PRAGMA foreign_keys = ON")
 
     def _property_from_row(self, row):
         photos = self.conn.execute(

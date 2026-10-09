@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from admin import AdminPanel
 from import_catalog import validated_catalog
 from models import Property
+from pricing import monthly_price, price
 from reporting import load_report_settings, send_due_report
 from storage import CatalogDB
 
@@ -136,10 +137,6 @@ def button(label: str, data: str):
     return {"text": label, "callback_data": data}
 
 
-def price(value: int) -> str:
-    return f"{value:,}".replace(",", " ") + " ₽"
-
-
 def format_area(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
@@ -157,7 +154,7 @@ def catalog(db: CatalogDB, mode: str = "rent"):
         if mode == "sale":
             amount = price(item.sale_price) if item.sale_price else "Цена по запросу"
         else:
-            amount = f"{price(item.price)}/мес."
+            amount = monthly_price(item.price)
         label = f"{item.location} · {format_area(item.area)} м² · {amount}"
         rows.append([button(label, f"show:{mode}:{item.id}")])
     text = "🏠 Объекты. " + ("Продажа" if mode == "sale" else "Аренда") + " (не пересылать)"
@@ -186,10 +183,10 @@ def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str
     if mode == "sale":
         amount = f"Продажа: {price(item.sale_price)}" if item.sale_price else "Продажа: цена по запросу"
     else:
-        amount = f"Аренда: {price(item.price)}/мес. с НДС"
+        amount = f"Аренда: {monthly_price(item.price, with_vat=True)}"
     lines = [
         f"<b>{html.escape(item.title)}</b>",
-        f"<b>{amount}</b>",
+        f"<b>{html.escape(amount)}</b>",
         "",
         f"📍 {html.escape(item.location)}",
         f"📐 {format_area(item.area)} м²" + (f"  ·  🏢 {html.escape(item.rooms)}" if item.rooms else ""),
