@@ -142,7 +142,7 @@ class AdminPanel:
         rows = []
         for item in self.db.list_properties(active_only=False):
             icon = "✅" if self.db.is_active(item.id) else "🙈"
-            rows.append([button(f"{icon} #{item.id} {item.display_name}", f"adm:edit:{item.id}")])
+            rows.append([button(f"{icon} #{item.id} {item.location}", f"adm:edit:{item.id}")])
         rows.append([button("➕ Добавить", "adm:add"), button("← Меню", "adm:menu")])
         self._send(chat_id, "Объекты (🙈 — скрыт):", rows)
 
