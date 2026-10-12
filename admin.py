@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from models import Property
 from pricing import monthly_price, price, validate_price_text
 from catalog_labels import BUTTON_TEXT_HINT, validate_button_text
+from field_input import OPTIONAL_TEXT_FIELDS, is_skip_command
 
 
 ADDRESS_HINT = "Полный адрес будет в карточке отдельной строкой с 📍. Текст кнопок задаётся отдельно."
@@ -52,8 +53,8 @@ def button(label, data):
 
 def parse_value(name, raw):
     value = raw.strip()
-    if value == "/skip":
-        if name in ("title", "teaser"):
+    if is_skip_command(value):
+        if name in OPTIONAL_TEXT_FIELDS:
             return ""
         if name == "features":
             return ()
@@ -377,6 +378,8 @@ class AdminPanel:
                     hint = f"\n{BUTTON_TEXT_HINT}"
                 if parts[3] == "title":
                     hint = "\nЕсли заголовок не нужен, отправьте /skip — он будет убран из карточки."
+                if parts[3] in ("teaser", "features"):
+                    hint = "\nЧтобы очистить это поле, отправьте /skip."
                 self._send(chat_id, f"Новое значение поля «{FIELD_LABELS[parts[3]]}»:{hint}\n/cancel — отмена")
         elif action == "photos":
             self.photo_menu(chat_id, item_id)

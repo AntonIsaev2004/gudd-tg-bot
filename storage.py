@@ -7,6 +7,7 @@ from pathlib import Path
 
 from models import Property
 from catalog_labels import initial_button_text
+from field_input import OPTIONAL_TEXT_FIELDS, is_skip_command
 
 
 class CatalogDB:
@@ -145,11 +146,25 @@ class CatalogDB:
             self._migrate_text_prices()
         if version < 8:
             self._migrate_button_texts()
-        # Исправление прежнего ввода: команда очистки ошибочно сохранялась как заголовок.
+        self._clean_skipped_optional_fields()
+
+    def _clean_skipped_optional_fields(self):
+        """Удаляет ранее сохранённую команду очистки из необязательных полей."""
         with self.conn:
-            self.conn.execute(
-                "UPDATE properties SET title = '', updated_at = CURRENT_TIMESTAMP WHERE title = ?", ("/skip",)
-            )
+            rows = self.conn.execute("SELECT id, title, teaser, features_json FROM properties").fetchall()
+            for row in rows:
+                for column in OPTIONAL_TEXT_FIELDS:
+                    if is_skip_command(row[column]):
+                        self.conn.execute(
+                            f"UPDATE properties SET {column} = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (row["id"],)
+                        )
+                features = json.loads(row["features_json"])
+                cleaned = [feature for feature in features if not is_skip_command(feature)]
+                if cleaned != features:
+                    self.conn.execute(
+                        "UPDATE properties SET features_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (json.dumps(cleaned, ensure_ascii=False), row["id"]),
+                    )
 
     def _migrate_button_texts(self):
         """Сохраняет прежние подписи как отдельные редактируемые тексты."""
