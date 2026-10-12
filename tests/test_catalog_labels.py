@@ -166,6 +166,82 @@ class CatalogLabelTests(unittest.TestCase):
                 self.assertEqual(item[field], initial_button_text(item["button_address"], item["area"], amount, mode=mode))
                 self.assertLessEqual(len(item[field]), 100)
 
+    def test_skip_removes_title_from_card_but_keeps_object_identifiable(self):
+        from datetime import datetime
+        from reporting import MOSCOW, report_content
+
+        db = CatalogDB(self.path)
+        try:
+            _, items = validated_catalog()
+            item_id = db.create_property(items[0], ["photo"])
+            original = db.get_property(item_id)
+            api = FakeAPI()
+            admin = AdminPanel(api, db, {42}, bot.send_detail)
+            admin.handle_callback(callback(42, f"adm:field:{item_id}:title"))
+            self.assertIn("/skip", api.calls[-1][1]["text"])
+            admin.handle_message(message(42, "/skip"))
+            item = db.get_property(item_id)
+            self.assertEqual(item.title, "")
+            self.assertEqual(item.rent_button_text, original.rent_button_text)
+            self.assertEqual(item.sale_button_text, original.sale_button_text)
+            for mode in ("rent", "sale"):
+                caption = bot.detail_caption(item, mode=mode)
+                self.assertNotIn("/skip", caption)
+                self.assertNotIn("<b></b>", caption)
+                self.assertEqual(caption.count(item.location), 1)
+                self.assertTrue(caption.startswith("<b>Аренда:" if mode == "rent" else "<b>Продажа:"))
+            admin.list_menu(42)
+            self.assertIn(item.location, api.calls[-1][1]["reply_markup"]["inline_keyboard"][0][0]["text"])
+            db.upsert_user({"id": 100, "first_name": "Посетитель"})
+            db.record_event(100, "property_opened", item_id)
+            _, body, html_body = report_content(db, datetime(2020, 1, 1, tzinfo=MOSCOW), datetime(2030, 1, 1, tzinfo=MOSCOW))
+            self.assertIn(item.location, body)
+            self.assertIn(html.escape(item.location), html_body)
+            self.assertNotIn("/skip", body + html_body)
+        finally:
+            db.close()
+        db = CatalogDB(self.path)
+        try:
+            self.assertEqual(db.get_property(item_id).title, "")
+            self.assertEqual(db.get_property(item_id).rent_button_text, original.rent_button_text)
+        finally:
+            db.close()
+
+    def test_skip_in_new_draft_and_cleanup_of_previously_saved_command(self):
+        from admin import STEPS
+
+        db = CatalogDB(self.path)
+        try:
+            _, items = validated_catalog()
+            api = FakeAPI()
+            admin = AdminPanel(api, db, {42}, bot.send_detail)
+            admin.handle_callback(callback(42, "adm:add"))
+            values = dict(items[0], title="/skip", area="29,4", teaser="/skip", features="/skip")
+            for field, _ in STEPS:
+                admin.handle_message(message(42, values[field]))
+            admin.handle_message(message(42, photo="photo"))
+            self.assertEqual(admin.draft_property(admin.states[42]).title, "")
+            admin.handle_message(message(42, "/done"))
+            admin.handle_callback(callback(42, f"adm:save:{admin.states[42].token}"))
+            self.assertEqual(db.list_properties()[0].title, "")
+            for field in ("price", "sale_price", "location", "description", "rent_button_text", "sale_button_text"):
+                with self.assertRaises(ValueError):
+                    parse_value(field, "/skip")
+            old_id = db.create_property(dict(items[0], title="/skip"), ["old_photo"])
+            before = db.get_property(old_id)
+        finally:
+            db.close()
+        db = CatalogDB(self.path)
+        try:
+            item = db.get_property(old_id)
+            self.assertEqual(item.title, "")
+            self.assertEqual((item.location, item.price, item.sale_price, item.photos,
+                              item.rent_button_text, item.sale_button_text),
+                             (before.location, before.price, before.sale_price, before.photos,
+                              before.rent_button_text, before.sale_button_text))
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

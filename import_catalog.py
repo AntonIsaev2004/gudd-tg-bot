@@ -28,7 +28,7 @@ def validated_catalog():
         for key, limit in (("title", 80), ("location", 100), ("rooms", 50),
                            ("teaser", 200), ("description", 800)):
             value = item.get(key)
-            if not isinstance(value, str) or len(value) > limit or (not value and key not in ("teaser", "rooms")):
+            if not isinstance(value, str) or len(value) > limit or (not value and key not in ("title", "teaser", "rooms")):
                 raise ValueError(f"Некорректное поле {key} в catalog.json")
         for key in ("price", "sale_price"):
             value = item.get(key)

@@ -161,7 +161,7 @@ def report_content(db, start_local, end_local):
     end_utc = _utc_db_time(end_local)
     properties, visits = db.report_data(start_utc, end_utc)
 
-    titles = {row["id"]: _one_line(row["title"]) for row in properties}
+    titles = {row["id"]: _one_line(row["title"] or row["location"]) for row in properties}
     by_property = {row["id"]: [] for row in properties}
     by_visitor = {}
     for row in visits:

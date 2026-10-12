@@ -145,6 +145,11 @@ class CatalogDB:
             self._migrate_text_prices()
         if version < 8:
             self._migrate_button_texts()
+        # Исправление прежнего ввода: команда очистки ошибочно сохранялась как заголовок.
+        with self.conn:
+            self.conn.execute(
+                "UPDATE properties SET title = '', updated_at = CURRENT_TIMESTAMP WHERE title = ?", ("/skip",)
+            )
 
     def _migrate_button_texts(self):
         """Сохраняет прежние подписи как отдельные редактируемые тексты."""
@@ -506,7 +511,7 @@ class CatalogDB:
         visited_ids = {row["property_id"] for row in visits}
         properties = [
             row for row in self.conn.execute(
-                "SELECT id, title, is_active FROM properties ORDER BY sort_order, id"
+                "SELECT id, title, location, is_active FROM properties ORDER BY sort_order, id"
             ).fetchall()
             if row["is_active"] or row["id"] in visited_ids
         ]

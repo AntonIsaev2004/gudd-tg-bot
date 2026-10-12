@@ -181,7 +181,6 @@ def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str
     else:
         amount = f"Аренда: {monthly_price(item.price, with_vat=True)}"
     lines = [
-        f"<b>{html.escape(item.title)}</b>",
         f"<b>{html.escape(amount)}</b>",
         "",
         f"📍 {html.escape(item.location)}",
@@ -190,6 +189,8 @@ def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str
         html.escape(item.description),
         "",
     ]
+    if item.title:
+        lines.insert(0, f"<b>{html.escape(item.title)}</b>")
     if item.features:
         lines.extend(("", " · ".join(html.escape(feature) for feature in item.features)))
     if photo_unavailable:

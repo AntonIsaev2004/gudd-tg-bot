@@ -14,7 +14,7 @@ ADDRESS_HINT = "Полный адрес будет в карточке отде�
 PRICE_INPUT_HINT = "Введите цену текстом до 50 символов, например «71 тыс.», «10,1 млн.» или «по запросу»."
 
 STEPS = (
-    ("title", "Заголовок карточки (короткое название без адреса, до 80 символов):"),
+    ("title", "Заголовок карточки (короткое название без адреса, до 80 символов). Если не нужен — /skip:"),
     ("price", "Аренда в месяц с НДС (текст до 50 символов, например «71 тыс.»):"),
     ("sale_price", "Цена продажи (текст до 50 символов, например «10,1 млн.»):"),
     ("area", "Площадь в м² (например, 82 или 82,5):"),
@@ -52,6 +52,12 @@ def button(label, data):
 
 def parse_value(name, raw):
     value = raw.strip()
+    if value == "/skip":
+        if name in ("title", "teaser"):
+            return ""
+        if name == "features":
+            return ()
+        raise ValueError("Это поле обязательно. Введите значение или отправьте /cancel для отмены.")
     if name in ("price", "sale_price"):
         return validate_price_text(value)
     if name in ("rent_button_text", "sale_button_text"):
@@ -62,14 +68,10 @@ def parse_value(name, raw):
             raise ValueError("Введите площадь числом, например 82 или 82,5.")
         return float(normalized)
     if name == "features":
-        if value == "/skip":
-            return ()
         features = tuple(part.strip() for part in re.split(r"[,\n]", value) if part.strip())
         if len(features) > 5 or any(len(part) > 40 for part in features):
             raise ValueError("Можно указать до 5 особенностей, каждая — до 40 символов.")
         return features
-    if name == "teaser" and value == "/skip":
-        return ""
     if not value:
         raise ValueError("Поле не может быть пустым.")
     if len(value) > MAX_LENGTHS[name]:
@@ -139,7 +141,7 @@ class AdminPanel:
         rows = []
         for item in self.db.list_properties(active_only=False):
             icon = "✅" if self.db.is_active(item.id) else "🙈"
-            rows.append([button(f"{icon} #{item.id} {item.title}", f"adm:edit:{item.id}")])
+            rows.append([button(f"{icon} #{item.id} {item.display_name}", f"adm:edit:{item.id}")])
         rows.append([button("➕ Добавить", "adm:add"), button("← Меню", "adm:menu")])
         self._send(chat_id, "Объекты (🙈 — скрыт):", rows)
 
@@ -168,7 +170,8 @@ class AdminPanel:
         sale = html.escape(f"Продажа: {price(item.sale_price)}") if item.sale_price else "Продажа: цена по запросу"
         self._send(
             chat_id,
-            f"<b>#{item.id} {html.escape(item.title)}</b>\n"
+            f"<b>#{item.id} {html.escape(item.display_name)}</b>\n"
+            f"Заголовок: {html.escape(item.title or '—')}\n"
             f"{amount} · {format(item.area, 'g').replace('.', ',')} м²\n"
             f"{sale}\n"
             f"📍 {html.escape(item.location)} · {html.escape(item.rooms)}\n"
@@ -268,7 +271,8 @@ class AdminPanel:
                     self._send(chat_id, "Нужна хотя бы одна фотография.")
                     return True
                 state.mode = "confirm_create"
-                self._send(chat_id, f"Создать «{html.escape(state.values['title'])}» с {len(state.photos)} фото?", [
+                name = state.values["title"] or state.values["location"]
+                self._send(chat_id, f"Создать «{html.escape(name)}» с {len(state.photos)} фото?", [
                     [button("👁 Предпросмотр", f"adm:previewdraft:{state.token}")],
                     [button("✅ Сохранить", f"adm:save:{state.token}"), button("❌ Отмена", "adm:cancel")]
                 ])
@@ -371,6 +375,8 @@ class AdminPanel:
                     hint = f"\n{PRICE_INPUT_HINT}"
                 if parts[3] in ("rent_button_text", "sale_button_text"):
                     hint = f"\n{BUTTON_TEXT_HINT}"
+                if parts[3] == "title":
+                    hint = "\nЕсли заголовок не нужен, отправьте /skip — он будет убран из карточки."
                 self._send(chat_id, f"Новое значение поля «{FIELD_LABELS[parts[3]]}»:{hint}\n/cancel — отмена")
         elif action == "photos":
             self.photo_menu(chat_id, item_id)
@@ -385,7 +391,7 @@ class AdminPanel:
                              if photo["id"] == int(parts[3])), None)
             if selected:
                 index, photo = selected
-                caption = f"Фото {index} из {len(photos)} · {html.escape(item.title)}"
+                caption = f"Фото {index} из {len(photos)} · {html.escape(item.display_name)}"
                 self.preview_sender(self.api, chat_id, replace(item, photos=(photo["media"],)), caption=caption)
                 self._send(chat_id, f"Удалить фото {index}?", [
                     [button("Да, удалить", f"adm:confirmphotodel:{item_id}:{parts[3]}"),
@@ -403,7 +409,7 @@ class AdminPanel:
         elif action == "delete":
             item = self.db.get_property(item_id, active_only=False)
             if item:
-                self._send(chat_id, f"Удалить «{html.escape(item.title)}» без возможности отмены?", [
+                self._send(chat_id, f"Удалить «{html.escape(item.display_name)}» без возможности отмены?", [
                     [button("Да, удалить", f"adm:confirmdelete:{item_id}"), button("Отмена", f"adm:edit:{item_id}")]
                 ])
         elif action == "confirmdelete":

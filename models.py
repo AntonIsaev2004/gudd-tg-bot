@@ -19,3 +19,8 @@ class Property:
     sale_price: Optional[str] = None
     rent_button_text: str = ""
     sale_button_text: str = ""
+
+    @property
+    def display_name(self):
+        """Имя для управления и подтверждений, когда заголовок карточки отключён."""
+        return self.title or self.location
