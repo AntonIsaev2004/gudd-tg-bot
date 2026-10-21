@@ -111,16 +111,23 @@ def call_with_emoji_fallback(api, method, **params):
 
 
 def initialize_card_header(api, db):
-    """Заполняет шапку один раз, не перезаписывая текст, сохранённый администратором."""
-    if db.has_card_header():
-        return
+    """Загружает логотип и обновляет его после удаления из набора, сохраняя текст."""
+    stored = db.has_card_header()
+    header = db.get_card_header()
+    if stored:
+        # Ручной текст, отключённый логотип и эмодзи администратора сохраняются.
+        if (header.text != DEFAULT_HEADER_TEXT or len(header.emoji_entities) != 1
+                or header.emoji_entities[0]["offset"] != 0 or header.emoji_entities[0]["length"] != 2):
+            return
     sticker_set = api.call("getStickerSet", name=LOGO_SET_NAME, request_timeout=8)
     if sticker_set.get("sticker_type") != "custom_emoji":
         raise ValueError("Набор логотипа должен быть набором эмодзи.")
-    emoji_id = next((sticker.get("custom_emoji_id") for sticker in sticker_set.get("stickers", [])
-                     if sticker.get("custom_emoji_id")), None)
-    if not emoji_id:
+    emoji_ids = [sticker["custom_emoji_id"] for sticker in sticker_set.get("stickers", [])
+                 if sticker.get("custom_emoji_id")]
+    if not emoji_ids:
         raise ValueError("В наборе логотипа нет эмодзи.")
-    db.set_card_header(CardHeader.from_message({"text": DEFAULT_HEADER_TEXT, "entities": [
-        {"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": emoji_id},
+    if stored and header.emoji_entities[0]["custom_emoji_id"] in emoji_ids:
+        return
+    db.set_card_header(CardHeader.from_message({"text": header.text, "entities": [
+        {"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": emoji_ids[0]},
     ]}))

@@ -456,7 +456,7 @@ def main():
     try:
         initialize_card_header(api, db)
     except (BotApiError, OSError, ValueError) as exc:
-        print(f"Логотип для шапки пока недоступен ({type(exc).__name__}); используется обычный значок. Повтор при следующем запуске.", file=sys.stderr)
+        print(f"Не удалось обновить логотип ({type(exc).__name__}); текущий текст контактов сохранён. Повтор при следующем запуске.", file=sys.stderr)
     try:
         report_settings = load_report_settings(env_file, load_setting)
     except ValueError as exc:

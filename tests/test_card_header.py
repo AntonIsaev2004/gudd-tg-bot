@@ -36,20 +36,64 @@ class CardHeaderTests(unittest.TestCase):
         self.temp.cleanup()
         bot.ACTIVE_DETAILS.clear()
 
-    def test_default_logo_is_resolved_once_without_overwriting_admin_changes(self):
+    def test_default_logo_is_checked_on_startup_without_overwriting_admin_changes(self):
         api = Mock()
         api.call.return_value = {"sticker_type": "custom_emoji", "stickers": [{"custom_emoji_id": "123456"}]}
         self.assertEqual(self.db.get_card_header().text, DEFAULT_HEADER_TEXT)
         initialize_card_header(api, self.db)
         self.assertIn('<tg-emoji emoji-id="123456">🏢</tg-emoji>', self.db.get_card_header().as_html())
         initialize_card_header(api, self.db)
-        self.assertEqual(api.call.call_count, 1)
+        self.assertEqual(api.call.call_count, 2)
         self.db.set_card_header(CardHeader("Свой текст администратора"))
         self.db.close()
         self.db = CatalogDB(self.path)
         initialize_card_header(api, self.db)
-        self.assertEqual(api.call.call_count, 1)
+        self.assertEqual(api.call.call_count, 2)
         self.assertEqual(self.db.get_card_header().text, "Свой текст администратора")
+
+    def test_deleted_logo_is_refreshed_and_saved_for_all_cards(self):
+        self.db.set_card_header(CardHeader.from_message(header_message(DEFAULT_HEADER_TEXT)))
+        self.db.close()
+        self.db = CatalogDB(self.path)
+        api = Mock()
+        api.call.return_value = {"sticker_type": "custom_emoji", "stickers": [{"custom_emoji_id": "654321"}]}
+        initialize_card_header(api, self.db)
+        updated = self.db.get_card_header()
+        self.assertEqual(updated.text, DEFAULT_HEADER_TEXT)
+        self.assertEqual(updated.emoji_entities[0]["custom_emoji_id"], "654321")
+        for item in self.db.list_properties(active_only=False):
+            for mode in ("rent", "sale"):
+                caption = bot.detail_caption(item, mode=mode, header=updated)
+                self.assertTrue(caption.endswith(updated.as_html()))
+                self.assertIn('emoji-id="654321"', caption)
+                self.assertNotIn('emoji-id="123456"', caption)
+        self.db.close()
+        self.db = CatalogDB(self.path)
+        self.assertEqual(self.db.get_card_header(), updated)
+
+    def test_logo_refresh_keeps_existing_choice_and_survives_failed_lookup(self):
+        header = CardHeader.from_message(header_message(DEFAULT_HEADER_TEXT))
+        self.db.set_card_header(header)
+        api = Mock()
+        api.call.return_value = {"sticker_type": "custom_emoji", "stickers": [
+            {"custom_emoji_id": "654321"}, {"custom_emoji_id": "123456"}]}
+        initialize_card_header(api, self.db)
+        self.assertEqual(self.db.get_card_header(), header)
+        api.call.side_effect = OSError("offline")
+        with self.assertRaises(OSError):
+            initialize_card_header(api, self.db)
+        self.assertEqual(self.db.get_card_header(), header)
+        api.call.side_effect = None
+        for pack in ({"sticker_type": "custom_emoji", "stickers": []},
+                     {"sticker_type": "regular", "stickers": [{"custom_emoji_id": "654321"}]}):
+            api.call.return_value = pack
+            with self.assertRaises(ValueError):
+                initialize_card_header(api, self.db)
+            self.assertEqual(self.db.get_card_header(), header)
+        self.db.set_card_header(CardHeader(DEFAULT_HEADER_TEXT))
+        api.reset_mock()
+        initialize_card_header(api, self.db)
+        api.call.assert_not_called()
 
     def test_failed_logo_lookup_leaves_default_text_and_can_retry(self):
         api = Mock()
