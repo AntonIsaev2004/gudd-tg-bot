@@ -3,6 +3,7 @@
 import html
 import json
 import os
+import re
 import sqlite3
 import ssl
 import smtplib
@@ -20,6 +21,7 @@ from models import Property
 from pricing import monthly_price, price
 from reporting import load_report_settings, send_due_report
 from storage import CatalogDB
+from card_header import call_with_emoji_fallback, initialize_card_header, utf16_length
 
 
 EXPECTED_BOT_USERNAME = "Gudd_centr_nedvizhimosti_bot"
@@ -175,7 +177,7 @@ def detail_controls(db: CatalogDB, item: Property, mode: str = "rent"):
     return f"Объект {index + 1} из {len(items)}", {"inline_keyboard": rows}
 
 
-def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str = "rent"):
+def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str = "rent", header=None):
     if mode == "sale":
         amount = f"Продажа: {price(item.sale_price)}" if item.sale_price else "Продажа: цена по запросу"
     else:
@@ -191,6 +193,8 @@ def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str
     ]
     if item.title:
         lines.insert(0, f"<b>{html.escape(item.title)}</b>")
+    if header is not None and header.text:
+        lines.insert(0, header.as_html() + "\n")
     if item.features:
         lines.extend(("", " · ".join(html.escape(feature) for feature in item.features)))
     if photo_unavailable:
@@ -211,23 +215,32 @@ def send_catalog(api: TelegramAPI, db: CatalogDB, chat_id: int, mode: str = "ren
     return api.call("sendMessage", **params)
 
 
-def send_detail(api: TelegramAPI, chat_id: int, item: Property, caption=None, *, mode: str = "rent"):
-    caption = detail_caption(item, mode=mode) if caption is None else caption
+def send_detail(api: TelegramAPI, chat_id: int, item: Property, caption=None, *, mode: str = "rent", header=None):
+    caption = detail_caption(item, mode=mode, header=header) if caption is None else caption
+    visible_text = html.unescape(re.sub(r"<[^>]*>", "", caption))
+    # Длинное описание отправляется целиком один раз после альбома, без обрезания текста.
+    long_caption = utf16_length(visible_text) > 1024
+    caption_params = {} if long_caption else {"caption": caption, "parse_mode": "HTML"}
+    sent = None
     try:
         if len(item.photos) >= 2:
             media = [{"type": "photo", "media": photo_url} for photo_url in item.photos[:10]]
-            media[0].update(caption=caption, parse_mode="HTML")
-            return api.call("sendMediaGroup", chat_id=chat_id, media=media, request_timeout=60)
-        if item.photos:
-            return [api.call("sendPhoto", chat_id=chat_id, photo=item.photos[0], caption=caption, parse_mode="HTML", request_timeout=30)]
+            media[0].update(caption_params)
+            sent = call_with_emoji_fallback(api, "sendMediaGroup", chat_id=chat_id, media=media, request_timeout=60)
+        elif item.photos:
+            sent = [call_with_emoji_fallback(api, "sendPhoto", chat_id=chat_id, photo=item.photos[0], request_timeout=30, **caption_params)]
     except (BotApiError, OSError, ValueError) as exc:
         print(f"Альбом объекта {item.id} недоступен ({type(exc).__name__}); пробую обложку.", file=sys.stderr)
         try:
-            return [api.call("sendPhoto", chat_id=chat_id, photo=item.photos[0], caption=caption, parse_mode="HTML", request_timeout=30)]
+            sent = [call_with_emoji_fallback(api, "sendPhoto", chat_id=chat_id, photo=item.photos[0], request_timeout=30, **caption_params)]
         except (BotApiError, OSError, ValueError):
             pass
+    if sent is not None:
+        if long_caption:
+            sent.append(call_with_emoji_fallback(api, "sendMessage", chat_id=chat_id, text=caption, parse_mode="HTML"))
+        return sent
     fallback = f"{caption}\n\n<i>Фото временно недоступны.</i>"
-    return [api.call("sendMessage", chat_id=chat_id, text=fallback, parse_mode="HTML")]
+    return [call_with_emoji_fallback(api, "sendMessage", chat_id=chat_id, text=fallback, parse_mode="HTML")]
 
 
 def delete_quietly(api: TelegramAPI, chat_id: int, message_id: int):
@@ -244,7 +257,7 @@ def delete_detail(api: TelegramAPI, chat_id: int, detail: DetailView):
 
 
 def show_detail(api: TelegramAPI, db: CatalogDB, chat_id: int, item: Property, source_message_id: int, mode: str = "rent"):
-    sent = send_detail(api, chat_id, item, mode=mode)
+    sent = send_detail(api, chat_id, item, mode=mode, header=db.get_card_header())
     media_ids = tuple(message["message_id"] for message in sent)
     text, markup = detail_controls(db, item, mode)
     try:
@@ -440,6 +453,10 @@ def main():
     if corrected_buttons:
         print(f"Тексты кнопок каталога обновлены: {corrected_buttons}.", flush=True)
     try:
+        initialize_card_header(api, db)
+    except (BotApiError, OSError, ValueError) as exc:
+        print(f"Логотип для шапки пока недоступен ({type(exc).__name__}); используется обычный значок. Повтор при следующем запуске.", file=sys.stderr)
+    try:
         report_settings = load_report_settings(env_file, load_setting)
     except ValueError as exc:
         db.close()
@@ -451,7 +468,7 @@ def main():
     if report_settings is None:
         print("Почтовая сводка отключена: заполните SMTP_HOST, SMTP_USER и SMTP_PASSWORD в .env.", flush=True)
     else:
-        print(f"Почтовая сводка: понедельник и четверг 10:00 МСК → {report_settings.recipient}.", flush=True)
+        print(f"Почтовая сводка: ежедневно в 10:00 МСК → {report_settings.recipient}.", flush=True)
     offset = None
     next_report_check = 0.0
     try:

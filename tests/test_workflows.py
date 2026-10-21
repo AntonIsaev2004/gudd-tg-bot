@@ -538,6 +538,8 @@ class WorkflowTests(unittest.TestCase):
             def call(self, method, **params):
                 if method == "getMe":
                     return {"username": bot.EXPECTED_BOT_USERNAME}
+                if method == "getStickerSet":
+                    return {"sticker_type": "custom_emoji", "stickers": [{"custom_emoji_id": "123456"}]}
                 if method == "getUpdates":
                     raise KeyboardInterrupt
                 raise AssertionError(method)

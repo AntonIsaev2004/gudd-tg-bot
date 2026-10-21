@@ -8,6 +8,7 @@ from pathlib import Path
 from models import Property
 from catalog_labels import initial_button_text
 from field_input import OPTIONAL_TEXT_FIELDS, is_skip_command
+from card_header import CardHeader, DEFAULT_HEADER
 
 
 class CatalogDB:
@@ -25,6 +26,21 @@ class CatalogDB:
 
     def close(self):
         self.conn.close()
+
+    def has_card_header(self):
+        return self.conn.execute("SELECT 1 FROM bot_settings WHERE key = 'card_header'").fetchone() is not None
+
+    def get_card_header(self):
+        row = self.conn.execute("SELECT value FROM bot_settings WHERE key = 'card_header'").fetchone()
+        return CardHeader.from_json(row[0]) if row else DEFAULT_HEADER
+
+    def set_card_header(self, header):
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO bot_settings(key, value) VALUES ('card_header', ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                (header.to_json(),),
+            )
 
     def _initialize(self):
         self.conn.executescript("""
@@ -83,6 +99,11 @@ class CatalogDB:
             CREATE TABLE IF NOT EXISTS catalog_imports (
                 batch_id TEXT PRIMARY KEY,
                 imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
         """)
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]

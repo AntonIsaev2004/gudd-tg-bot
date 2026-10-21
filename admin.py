@@ -9,6 +9,7 @@ from models import Property
 from pricing import monthly_price, price, validate_price_text
 from catalog_labels import BUTTON_TEXT_HINT, validate_button_text
 from field_input import OPTIONAL_TEXT_FIELDS, is_skip_command
+from card_header import CardHeader, HEADER_MAX_LENGTH, call_with_emoji_fallback
 
 
 ADDRESS_HINT = "Полный адрес будет в карточке отдельной строкой с 📍. Текст кнопок задаётся отдельно."
@@ -95,18 +96,29 @@ class AdminPanel:
         params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         if rows:
             params["reply_markup"] = {"inline_keyboard": rows}
-        return self.api.call("sendMessage", **params)
+        return call_with_emoji_fallback(self.api, "sendMessage", **params)
 
     def menu(self, chat_id):
         self._send(chat_id, "⚙️ Управление объектами", [
             [button("🏠 Список объектов", "adm:list")],
             [button("➕ Добавить объект", "adm:add")],
+            [button("Шапка всех карточек", "adm:header")],
+        ])
+
+    def header_menu(self, chat_id):
+        header = self.db.get_card_header()
+        self._send(chat_id, "<b>Шапка всех карточек</b>\n\n"
+                   + (header.as_html() or "<i>Шапка отключена.</i>")
+                   + "\n\nЭтот текст показан в начале каждого объекта в аренде и продаже. "
+                   "Изменение действует для всех объектов при следующем открытии.", [
+            [button("✏️ Изменить шапку", "adm:editheader")],
+            [button("← Меню", "adm:menu")],
         ])
 
     def preview_item(self, chat_id, item, *, draft=False, mode="rent"):
         label = "Черновик — ещё не виден посетителям." if draft else "Предпросмотр карточки."
         self._send(chat_id, f"👁 {label}")
-        self.preview_sender(self.api, chat_id, item, mode=mode)
+        self.preview_sender(self.api, chat_id, item, mode=mode, header=self.db.get_card_header())
         label_text = item.sale_button_text if mode == "sale" else item.rent_button_text
         self._send(chat_id, f"Текст кнопки в списке {'продажи' if mode == 'sale' else 'аренды'}:\n{html.escape(label_text)}")
         state = self.states.get(chat_id) if draft else None
@@ -246,6 +258,17 @@ class AdminPanel:
             self.states.pop(chat_id, None)
             self.menu(chat_id)
             return True
+        if state.mode == "edit_header":
+            try:
+                header = CardHeader.from_message(message)
+            except ValueError as exc:
+                self._send(chat_id, html.escape(str(exc)))
+                return True
+            self.db.set_card_header(header)
+            self.states.pop(chat_id, None)
+            self._send(chat_id, "Шапка сохранена для всех карточек.")
+            self.header_menu(chat_id)
+            return True
         if state.mode == "create":
             if state.step < len(STEPS):
                 name = STEPS[state.step][0]
@@ -328,6 +351,7 @@ class AdminPanel:
         action = parts[1] if len(parts) >= 2 else ""
         item_id = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else None
         if action == "menu":
+            self.states.pop(chat_id, None)
             self.menu(chat_id)
         elif action == "list":
             self.list_menu(chat_id)
@@ -335,6 +359,14 @@ class AdminPanel:
             state = AdminState("create", token=secrets.token_hex(4))
             self.states[chat_id] = state
             self._next_create_prompt(chat_id, state)
+        elif action == "header":
+            self.states.pop(chat_id, None)
+            self.header_menu(chat_id)
+        elif action == "editheader":
+            self.states[chat_id] = AdminState("edit_header")
+            self._send(chat_id, f"Пришлите новую шапку целиком одним текстовым сообщением (до {HEADER_MAX_LENGTH} символов). "
+                       "Можно скопировать текущий текст и изменить телефон. Логотип вставьте прямо в сообщение из набора эмодзи. "
+                       "Шапка изменится сразу у всех объектов.\n/skip — убрать шапку\n/cancel — отмена")
         elif action == "cancel":
             self.states.pop(chat_id, None)
             self.menu(chat_id)

@@ -1,4 +1,4 @@
-"""Сводки по понедельникам и четвергам и отправка через SMTP с TLS."""
+"""Ежедневные сводки в 10:00 МСК и отправка через SMTP с TLS."""
 
 import html
 import re
@@ -249,34 +249,28 @@ def _boundary(day):
 
 
 def _previous_boundary(end_local):
-    if end_local.weekday() not in (0, 3):
-        raise ValueError("Дата сводки должна быть понедельником или четвергом.")
-    return end_local - timedelta(days=4 if end_local.weekday() == 0 else 3)
+    return end_local - timedelta(days=1)
 
 
 def _next_boundary(end_local):
-    if end_local.weekday() not in (0, 3):
-        raise ValueError("Дата сводки должна быть понедельником или четвергом.")
-    return end_local + timedelta(days=3 if end_local.weekday() == 0 else 4)
+    return end_local + timedelta(days=1)
 
 
 def _last_due_boundary(now_local):
-    for days_back in range(8):
-        candidate = _boundary(now_local.date() - timedelta(days=days_back))
-        if candidate.weekday() in (0, 3) and candidate <= now_local:
-            return candidate
-    raise ValueError("Не удалось определить дату сводки.")
+    candidate = _boundary(now_local.date())
+    return candidate if candidate <= now_local else _previous_boundary(candidate)
 
 
 def send_due_report(db, settings, now=None, send_email=send_report_email):
-    """Отправляет один период между соседними пн/чт 10:00 МСК."""
+    """Отправляет один суточный период; продолжает с конца последней отправленной сводки."""
     now_local = (now or datetime.now(timezone.utc)).astimezone(MOSCOW)
     latest_end = _last_due_boundary(now_local)
     last_sent = db.last_report_period_end()
-    period_end = _next_boundary(_boundary(date.fromisoformat(last_sent))) if last_sent else latest_end
+    period_start = _boundary(date.fromisoformat(last_sent)) if last_sent else _previous_boundary(latest_end)
+    period_end = _next_boundary(period_start)
     if period_end > latest_end:
         return None
-    subject, body, html_body = report_content(db, _previous_boundary(period_end), period_end)
+    subject, body, html_body = report_content(db, period_start, period_end)
     send_email(settings, subject, body, html_body)
     db.mark_report_sent(period_end.date().isoformat(), settings.recipient)
     return period_end.date()

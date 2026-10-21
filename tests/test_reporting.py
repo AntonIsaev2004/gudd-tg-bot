@@ -126,32 +126,65 @@ class ReportingTests(unittest.TestCase):
         self.assertNotIn("#1", body)
         self.assertNotRegex(html_body, r">\s*#1(?:\s|<)")
 
-    def test_monday_thursday_due_time_retry_and_catchup(self):
+    def test_daily_due_time_retry_and_catchup(self):
         settings = ReportSettings("smtp.mail.ru", 465, "sender@mail.ru", "unused", "sender@mail.ru", "gudd22@mail.ru")
         sent = []
         sender = lambda config, subject, body, html_body: sent.append((subject, body, html_body))
         self.db.mark_report_sent("2026-10-01", settings.recipient)
-        before = datetime(2026, 10, 5, 9, 59, tzinfo=MOSCOW)
-        monday = datetime(2026, 10, 5, 10, tzinfo=MOSCOW)
+        before = datetime(2026, 10, 2, 9, 59, tzinfo=MOSCOW)
+        due = datetime(2026, 10, 2, 10, tzinfo=MOSCOW)
         self.assertIsNone(send_due_report(self.db, settings, before, sender))
 
         def fail_once(config, subject, body, html_body):
             raise OSError("SMTP недоступен")
 
         with self.assertRaises(OSError):
-            send_due_report(self.db, settings, monday, fail_once)
+            send_due_report(self.db, settings, due, fail_once)
         self.assertEqual(self.db.last_report_period_end(), "2026-10-01")
-        self.assertEqual(str(send_due_report(self.db, settings, monday, sender)), "2026-10-05")
+        self.assertEqual(str(send_due_report(self.db, settings, due, sender)), "2026-10-02")
         self.db.close()
         self.db = CatalogDB(self.path)
-        self.assertIsNone(send_due_report(self.db, settings, monday, sender))
-        self.assertIsNone(send_due_report(self.db, settings, datetime(2026, 10, 8, 9, 59, tzinfo=MOSCOW), sender))
-        self.assertEqual(str(send_due_report(self.db, settings, datetime(2026, 10, 8, 10, tzinfo=MOSCOW), sender)), "2026-10-08")
-        after_downtime = datetime(2026, 10, 15, 10, tzinfo=MOSCOW)
-        self.assertEqual(str(send_due_report(self.db, settings, after_downtime, sender)), "2026-10-12")
-        self.assertEqual(str(send_due_report(self.db, settings, after_downtime, sender)), "2026-10-15")
+        self.assertIsNone(send_due_report(self.db, settings, due, sender))
+        self.assertIsNone(send_due_report(self.db, settings, datetime(2026, 10, 3, 9, 59, tzinfo=MOSCOW), sender))
+        self.assertEqual(str(send_due_report(self.db, settings, datetime(2026, 10, 3, 10, tzinfo=MOSCOW), sender)), "2026-10-03")
+        after_downtime = datetime(2026, 10, 6, 10, tzinfo=MOSCOW)
+        for expected in ("2026-10-04", "2026-10-05", "2026-10-06"):
+            self.assertEqual(str(send_due_report(self.db, settings, after_downtime, sender)), expected)
         self.assertIsNone(send_due_report(self.db, settings, after_downtime, sender))
-        self.assertEqual(len(sent), 4)
+        self.assertEqual(len(sent), 5)
+
+    def test_switch_from_old_schedule_has_no_gaps_or_overlapping_visits(self):
+        settings = ReportSettings("smtp.mail.ru", 465, "sender@mail.ru", "unused", "sender@mail.ru", "gudd22@mail.ru")
+        self.db.mark_report_sent("2026-10-19", settings.recipient)  # последняя сводка старого расписания, пн
+        with self.db.conn:
+            self.db.conn.executemany(
+                "INSERT INTO user_events(telegram_id, event_type, property_id, created_at) VALUES (100, 'property_opened', 1, ?)",
+                [(value,) for value in ("2026-10-19 06:59:59", "2026-10-19 07:00:00", "2026-10-20 06:59:59",
+                                       "2026-10-20 07:00:00", "2026-10-21 07:00:00")],
+            )
+        sent = []
+        sender = lambda config, subject, body, html_body: sent.append(body)
+        now = datetime(2026, 10, 21, 10, tzinfo=MOSCOW)
+        self.assertEqual(str(send_due_report(self.db, settings, now, sender)), "2026-10-20")
+        self.assertIn("19.10.2026 10:00–20.10.2026 10:00", sent[-1])
+        self.assertIn("Просмотров объектов: 2", sent[-1])
+        self.assertEqual(str(send_due_report(self.db, settings, now, sender)), "2026-10-21")
+        self.assertIn("20.10.2026 10:00–21.10.2026 10:00", sent[-1])
+        self.assertIn("Просмотров объектов: 1", sent[-1])
+        self.db.close()
+        self.db = CatalogDB(self.path)
+        self.assertIsNone(send_due_report(self.db, settings, now, sender))
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(str(send_due_report(self.db, settings, datetime(2026, 10, 22, 10, tzinfo=MOSCOW), sender)), "2026-10-22")
+        self.assertIn("Просмотров объектов: 1", sent[-1])
+
+    def test_first_daily_report_is_one_complete_day(self):
+        settings = ReportSettings("smtp.mail.ru", 465, "sender@mail.ru", "unused", "sender@mail.ru", "gudd22@mail.ru")
+        sent = []
+        sender = lambda config, subject, body, html_body: sent.append(body)
+        self.assertEqual(str(send_due_report(self.db, settings, datetime(2026, 10, 2, 10, tzinfo=MOSCOW), sender)), "2026-10-02")
+        self.assertIn("01.10.2026 10:00–02.10.2026 10:00", sent[-1])
+        self.assertIn("Просмотров объектов: 1", sent[-1])
 
     def test_incomplete_smtp_settings_are_rejected(self):
         values = {}
