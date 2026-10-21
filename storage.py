@@ -8,7 +8,7 @@ from pathlib import Path
 from models import Property
 from catalog_labels import initial_button_text
 from field_input import OPTIONAL_TEXT_FIELDS, is_skip_command
-from card_header import CardHeader, DEFAULT_HEADER
+from card_header import CardHeader, DEFAULT_HEADER, DEFAULT_HEADER_TEXT, LEGACY_HEADER_TEXT
 
 
 class CatalogDB:
@@ -168,6 +168,25 @@ class CatalogDB:
         if version < 8:
             self._migrate_button_texts()
         self._clean_skipped_optional_fields()
+        self._migrate_default_contact_text()
+
+    def _migrate_default_contact_text(self):
+        """Один раз сокращает прежний стандартный контакт, сохраняя логотип и ручные правки."""
+        with self.conn:
+            if self.conn.execute("SELECT 1 FROM bot_settings WHERE key = 'card_header_footer_v1'").fetchone():
+                return
+            row = self.conn.execute("SELECT value FROM bot_settings WHERE key = 'card_header'").fetchone()
+            if row is None:
+                return
+            header = CardHeader.from_json(row[0])
+            if header.text == LEGACY_HEADER_TEXT and all(
+                    entity["offset"] == 0 and entity["length"] == 2 for entity in header.emoji_entities):
+                updated = CardHeader(DEFAULT_HEADER_TEXT, header.emoji_entities)
+                self.conn.execute(
+                    "UPDATE bot_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'card_header'",
+                    (updated.to_json(),),
+                )
+            self.conn.execute("INSERT INTO bot_settings(key, value) VALUES ('card_header_footer_v1', '1')")
 
     def _clean_skipped_optional_fields(self):
         """Удаляет ранее сохранённую команду очистки из необязательных полей."""

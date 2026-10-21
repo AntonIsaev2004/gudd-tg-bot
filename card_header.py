@@ -10,7 +10,8 @@ from field_input import is_skip_command
 
 HEADER_MAX_LENGTH = 240
 LOGO_SET_NAME = "GuddCNEmoji"
-DEFAULT_HEADER_TEXT = "🏢 Для связи с менеджером: +7 987 404 0101"
+LEGACY_HEADER_TEXT = "🏢 Для связи с менеджером: +7 987 404 0101"
+DEFAULT_HEADER_TEXT = "🏢 📞 +7 987 404 0101"
 CUSTOM_EMOJI_TAG = re.compile(r'<tg-emoji emoji-id="[0-9]+">(.*?)</tg-emoji>', re.DOTALL)
 
 

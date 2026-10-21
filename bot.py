@@ -189,16 +189,15 @@ def detail_caption(item: Property, photo_unavailable: bool = False, *, mode: str
         f"📐 {format_area(item.area)} м²" + (f"  ·  🏢 {html.escape(item.rooms)}" if item.rooms else ""),
         "",
         html.escape(item.description),
-        "",
     ]
     if item.title:
         lines.insert(0, f"<b>{html.escape(item.title)}</b>")
-    if header is not None and header.text:
-        lines.insert(0, header.as_html() + "\n")
     if item.features:
         lines.extend(("", " · ".join(html.escape(feature) for feature in item.features)))
     if photo_unavailable:
         lines.append("<i>Фото временно недоступны.</i>")
+    if header is not None and header.text:
+        lines.extend(("", header.as_html()))
     return "\n".join(lines)
 
 
@@ -216,6 +215,7 @@ def send_catalog(api: TelegramAPI, db: CatalogDB, chat_id: int, mode: str = "ren
 
 
 def send_detail(api: TelegramAPI, chat_id: int, item: Property, caption=None, *, mode: str = "rent", header=None):
+    generated_caption = caption is None
     caption = detail_caption(item, mode=mode, header=header) if caption is None else caption
     visible_text = html.unescape(re.sub(r"<[^>]*>", "", caption))
     # Длинное описание отправляется целиком один раз после альбома, без обрезания текста.
@@ -239,7 +239,8 @@ def send_detail(api: TelegramAPI, chat_id: int, item: Property, caption=None, *,
         if long_caption:
             sent.append(call_with_emoji_fallback(api, "sendMessage", chat_id=chat_id, text=caption, parse_mode="HTML"))
         return sent
-    fallback = f"{caption}\n\n<i>Фото временно недоступны.</i>"
+    fallback = (detail_caption(item, photo_unavailable=True, mode=mode, header=header)
+                if generated_caption else f"{caption}\n\n<i>Фото временно недоступны.</i>")
     return [call_with_emoji_fallback(api, "sendMessage", chat_id=chat_id, text=fallback, parse_mode="HTML")]
 
 

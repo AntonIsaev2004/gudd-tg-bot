@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import bot
 from admin import AdminPanel
-from card_header import CardHeader, DEFAULT_HEADER_TEXT, call_with_emoji_fallback, initialize_card_header
+from card_header import CardHeader, DEFAULT_HEADER_TEXT, LEGACY_HEADER_TEXT, call_with_emoji_fallback, initialize_card_header
 from import_catalog import validated_catalog
 from storage import CatalogDB
 from test_workflows import FakeAPI, callback, message
@@ -63,6 +63,31 @@ class CardHeaderTests(unittest.TestCase):
         initialize_card_header(api, self.db)
         self.assertTrue(self.db.has_card_header())
 
+    def test_old_default_contact_migrates_once_and_preserves_logo(self):
+        legacy = CardHeader.from_message(header_message(LEGACY_HEADER_TEXT))
+        self.db.set_card_header(legacy)
+        self.db.close()
+        self.db = CatalogDB(self.path)
+        updated = self.db.get_card_header()
+        self.assertEqual(updated.text, DEFAULT_HEADER_TEXT)
+        self.assertEqual(updated.emoji_entities, legacy.emoji_entities)
+        # После миграции даже явно возвращённый администратором старый текст не заменяется.
+        self.db.set_card_header(legacy)
+        self.db.close()
+        self.db = CatalogDB(self.path)
+        self.assertEqual(self.db.get_card_header(), legacy)
+
+    def test_contact_migration_preserves_custom_text_and_disabled_block(self):
+        for index, header in enumerate((CardHeader("Другой телефон: +7 000 000 0000"), CardHeader(""))):
+            with self.subTest(header=header.text):
+                path = Path(self.temp.name) / f"custom-{index}.sqlite3"
+                with_db = CatalogDB(path)
+                with_db.set_card_header(header)
+                with_db.close()
+                with_db = CatalogDB(path)
+                self.assertEqual(with_db.get_card_header(), header)
+                with_db.close()
+
     def test_header_edit_is_admin_only_and_applies_to_all_cards_and_previews(self):
         before = self.db.list_properties(active_only=False)
         self.admin.handle_callback(callback(43, "adm:editheader"))
@@ -76,18 +101,38 @@ class CardHeaderTests(unittest.TestCase):
         for mode in ("rent", "sale"):
             bot.handle_callback(self.api, self.db, self.admin, callback(100, f"show:{mode}:{self.first}"))
             album = next(params for method, params in reversed(self.api.calls) if method == "sendMediaGroup")
-            self.assertTrue(album["media"][0]["caption"].startswith(expected + "\n\n"))
+            self.assertTrue(album["media"][0]["caption"].endswith("\n\n" + expected))
             self.assertNotIn("caption", album["media"][1])
         self.db.set_active(self.second, False)
         self.admin.handle_callback(callback(42, f"adm:preview:{self.second}:sale"))
         preview = next(params for method, params in reversed(self.api.calls) if method == "sendPhoto")
-        self.assertTrue(preview["caption"].startswith(expected))
+        self.assertTrue(preview["caption"].endswith(expected))
         self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM user_events WHERE event_type = 'property_opened'").fetchone()[0], 2)
         self.db.close()
         self.db = CatalogDB(self.path)
         new_id = self.db.create_property(self.items[2], ["new_photo"])
         caption = bot.detail_caption(self.db.get_property(new_id), header=self.db.get_card_header())
-        self.assertTrue(caption.startswith(expected))
+        self.assertTrue(caption.endswith(expected))
+
+    def test_contact_stays_last_when_photos_are_unavailable(self):
+        header = CardHeader(DEFAULT_HEADER_TEXT)
+        item = self.db.get_property(self.first)
+        for mode in ("rent", "sale"):
+            with self.subTest(mode=mode):
+                api = FakeAPI()
+                original_call = api.call
+
+                def call(method, **params):
+                    if method in ("sendMediaGroup", "sendPhoto"):
+                        raise bot.BotApiError(400, "PHOTO_UNAVAILABLE")
+                    return original_call(method, **params)
+
+                api.call = call
+                bot.send_detail(api, 100, item, mode=mode, header=header)
+                text = api.calls[-1][1]["text"]
+                self.assertIn("Фото временно недоступны", text)
+                self.assertTrue(text.endswith("\n\n" + header.as_html()))
+                self.assertEqual(text.count(header.as_html()), 1)
 
     def test_header_cancel_navigation_skip_and_invalid_input(self):
         initial = self.db.get_card_header()
